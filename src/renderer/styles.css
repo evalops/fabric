@@ -1549,6 +1549,183 @@ body.dark .attention-card:hover {
 .tool-breakdown-ok { color: var(--green); margin-left: auto; }
 .tool-breakdown-err { color: var(--red); margin-left: auto; }
 
+/* ── Graph Toolbar ─────────────────────────────────── */
+.graph-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.graph-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.graph-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.graph-toolbar-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+.graph-toolbar-select {
+  padding: 4px 24px 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%239298a8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+}
+.graph-toolbar-input {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  width: 140px;
+  outline: none;
+}
+.graph-toolbar-input:focus {
+  border-color: var(--accent);
+}
+.graph-toolbar-toggles {
+  margin-left: auto;
+  gap: 12px;
+}
+.graph-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.graph-toggle input {
+  accent-color: var(--accent);
+}
+
+/* Status filter buttons */
+.graph-status-filters {
+  display: flex;
+  gap: 4px;
+}
+.graph-status-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-base);
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.graph-status-btn.active {
+  border-color: var(--btn-color);
+  color: var(--btn-color);
+  background: color-mix(in srgb, var(--btn-color) 8%, transparent);
+}
+.graph-status-btn:hover {
+  border-color: var(--btn-color);
+}
+
+/* ── Graph Stats Bar ──────────────────────────────── */
+.graph-stats-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  margin-bottom: 12px;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.graph-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.graph-stat-value {
+  font-size: 16px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+.graph-stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.graph-stat-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+}
+
+/* ── Graph Container ──────────────────────────────── */
+.graph-container {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-base);
+  overflow: auto;
+  max-height: calc(100vh - 340px);
+}
+
+/* ── Graph Legend ─────────────────────────────────── */
+.graph-legend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.graph-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.graph-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.graph-legend-line {
+  width: 16px;
+  height: 2px;
+  border-radius: 1px;
+  flex-shrink: 0;
+}
+.graph-legend-dash {
+  background: repeating-linear-gradient(90deg, var(--border-lit) 0 4px, transparent 4px 8px) !important;
+}
+.graph-legend-divider {
+  width: 1px;
+  height: 14px;
+  background: var(--border);
+}
+
 /* ── Graph progress ring animation ───────────────────── */
 .graph-node:hover rect {
   filter: brightness(1.05);
