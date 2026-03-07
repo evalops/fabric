@@ -1264,3 +1264,79 @@ body.dark .detail-overlay::before { background: rgba(0,0,0,0.4); }
   font-size: 15px;
   line-height: 1.6;
 }
+
+/* ── Observability elements ──────────────────────────── */
+.outcome-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.outcome-success { background: var(--green-soft, rgba(34,197,94,0.1)); color: var(--green); }
+.outcome-budget_exhausted,
+.outcome-turns_exhausted { background: var(--amber-soft, rgba(245,158,11,0.1)); color: var(--amber); }
+.outcome-user_abort { background: var(--bg-surface); color: var(--text-muted); }
+.outcome-error { background: rgba(239,68,68,0.1); color: var(--red); }
+
+.retry-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--amber-soft, rgba(245,158,11,0.1));
+  color: var(--amber);
+}
+
+/* ── Steering input ──────────────────────────────────── */
+#steering-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(99,102,241,0.15);
+}
+#steering-send:hover {
+  opacity: 0.9;
+}
+#steering-send:active {
+  transform: scale(0.97);
+}
+
+/* ── Tool breakdown ──────────────────────────────────── */
+.tool-breakdown-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+.tool-breakdown-name {
+  font-weight: 600;
+  min-width: 80px;
+}
+.tool-breakdown-stat {
+  color: var(--text-muted);
+}
+.tool-breakdown-ok { color: var(--green); margin-left: auto; }
+.tool-breakdown-err { color: var(--red); margin-left: auto; }
+
+/* ── Graph progress ring animation ───────────────────── */
+.graph-node:hover rect {
+  filter: brightness(1.05);
+}
+.graph-node:hover text {
+  fill: var(--accent);
+}
+@keyframes graph-pulse-ring {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+.graph-pulse {
+  animation: graph-pulse-ring 2s ease-in-out infinite;
+}
