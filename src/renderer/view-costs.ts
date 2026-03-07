@@ -267,18 +267,22 @@ export function renderCosts(): void {
           const budgetPct = budgetLimit > 0 ? (g.costUsd / budgetLimit) * 100 : 0;
           const duration = formatDuration(g.startedAt, g.completedAt);
           const goalTokens = g.inputTokens + g.outputTokens;
+          const toolErrors = g.toolCalls.filter(tc => !tc.success).length;
           return `
             <div class="cost-goal-row" data-goal="${g.id}" style="padding: 12px 0; border-top: 1px solid var(--bg-surface); cursor: pointer;">
               <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
                 <div class="goal-indicator ind-${g.status}" style="margin-top: 0;"></div>
                 <span style="font-size: 13px; font-weight: 500; flex: 1;">${g.title}</span>
+                ${g.outcome ? `<span class="outcome-badge outcome-${g.outcome}" style="font-size: 10px; padding: 1px 6px;">${g.outcome}</span>` : ""}
                 <span style="font-family: var(--font-mono); font-size: 15px; font-weight: 700;">$${g.costUsd.toFixed(2)}</span>
               </div>
               <div style="display: flex; gap: 16px; font-size: 11px; color: var(--text-muted); margin-bottom: 6px; padding-left: 16px;">
                 <span>${formatTokens(goalTokens)} tokens</span>
                 <span>${duration}</span>
                 <span>${g.steps.filter(s => s.state === "done").length}/${g.steps.length} steps</span>
-                <span>${g.agentCount} agent${g.agentCount !== 1 ? "s" : ""}</span>
+                <span>${g.turnCount || 0} turns</span>
+                <span>${g.toolCalls.length} tool calls${toolErrors > 0 ? ` (${toolErrors} err)` : ""}</span>
+                ${g.retryCount ? `<span style="color: var(--amber);">${g.retryCount} retries</span>` : ""}
               </div>
               <div style="display: flex; align-items: center; gap: 8px; padding-left: 16px;">
                 <div style="flex: 1; height: 6px; background: var(--bg-surface); border-radius: 3px; overflow: hidden; position: relative;">
@@ -290,6 +294,40 @@ export function renderCosts(): void {
           `;
         }).join("")}
       </div>
+
+      <!-- Tool call summary -->
+      ${(() => {
+        const toolStats: Record<string, { count: number; errors: number; totalMs: number }> = {};
+        state.goals.forEach(g => g.toolCalls.forEach(tc => {
+          if (!toolStats[tc.tool]) toolStats[tc.tool] = { count: 0, errors: 0, totalMs: 0 };
+          toolStats[tc.tool].count++;
+          if (!tc.success) toolStats[tc.tool].errors++;
+          toolStats[tc.tool].totalMs += tc.durationMs;
+        }));
+        const sorted = Object.entries(toolStats).sort(([, a], [, b]) => b.count - a.count);
+        const totalCalls = sorted.reduce((s, [, d]) => s + d.count, 0);
+        if (totalCalls === 0) return "";
+        return `
+      <div class="settings-card">
+        <div class="settings-card-header">
+          <div class="settings-card-title">Tool usage</div>
+          <div class="settings-card-desc">${totalCalls} total calls across ${sorted.length} tools</div>
+        </div>
+        <div style="font-size: 11px;">
+          <div style="display: grid; grid-template-columns: 1fr 50px 60px 50px; gap: 4px; padding: 6px 0; border-bottom: 1px solid var(--bg-surface); color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;">
+            <span>Tool</span><span style="text-align: right;">Calls</span><span style="text-align: right;">Avg ms</span><span style="text-align: right;">Errors</span>
+          </div>
+          ${sorted.slice(0, 12).map(([name, d]) => `
+            <div style="display: grid; grid-template-columns: 1fr 50px 60px 50px; gap: 4px; padding: 6px 0; border-bottom: 1px solid var(--bg-surface);">
+              <span style="font-family: var(--font-mono); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${name}</span>
+              <span style="text-align: right; font-family: var(--font-mono); color: var(--text-primary);">${d.count}</span>
+              <span style="text-align: right; font-family: var(--font-mono); color: var(--text-muted);">${Math.round(d.totalMs / d.count)}</span>
+              <span style="text-align: right; font-family: var(--font-mono); color: ${d.errors > 0 ? "var(--red)" : "var(--text-muted)"};">${d.errors}</span>
+            </div>
+          `).join("")}
+        </div>
+      </div>`;
+      })()}
 
       <!-- Budget -->
       <div class="settings-card">

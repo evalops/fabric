@@ -285,6 +285,40 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
+  // ── Goal Dependencies ───────────────────────────────
+
+  // GET /api/goals/:id/dependencies
+  const depsMatch = path.match(/^\/api\/goals\/([^/]+)\/dependencies$/);
+  if (depsMatch && method === "GET") {
+    if (!db) {
+      json(res, []);
+      return;
+    }
+    const deps = await db.getGoalDependencies(depsMatch[1]);
+    json(res, deps);
+    return;
+  }
+
+  // POST /api/goals/:id/dependencies — Add a dependency
+  if (depsMatch && method === "POST") {
+    if (!db) {
+      json(res, { error: "No database configured" }, 400);
+      return;
+    }
+    const body = await parseBody(req);
+    if (!body.targetGoalId || !body.type) {
+      json(res, { error: "targetGoalId and type are required" }, 400);
+      return;
+    }
+    if (!["blocks", "enables"].includes(body.type)) {
+      json(res, { error: "type must be 'blocks' or 'enables'" }, 400);
+      return;
+    }
+    await db.addGoalDependency(depsMatch[1], body.targetGoalId, body.type);
+    json(res, { status: "dependency added" }, 201);
+    return;
+  }
+
   // ── Observability Routes ──────────────────────────
 
   // GET /api/costs/today

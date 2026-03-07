@@ -268,6 +268,40 @@ export class FabricDB {
     return rows;
   }
 
+  // ── Goal Dependencies ──────────────────────────────
+
+  async addGoalDependency(fromGoalId: string, toGoalId: string, depType: "blocks" | "enables"): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO goal_dependencies (from_goal_id, to_goal_id, dep_type)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (from_goal_id, to_goal_id, dep_type) DO NOTHING`,
+      [fromGoalId, toGoalId, depType]
+    );
+  }
+
+  async getGoalDependencies(goalId: string): Promise<any[]> {
+    const { rows } = await this.pool.query(
+      `SELECT gd.*, g.title as target_title, g.status as target_status
+       FROM goal_dependencies gd
+       JOIN goals g ON g.id = gd.to_goal_id
+       WHERE gd.from_goal_id = $1
+       UNION ALL
+       SELECT gd.*, g.title as target_title, g.status as target_status
+       FROM goal_dependencies gd
+       JOIN goals g ON g.id = gd.from_goal_id
+       WHERE gd.to_goal_id = $1`,
+      [goalId]
+    );
+    return rows;
+  }
+
+  async removeGoalDependency(fromGoalId: string, toGoalId: string, depType: string): Promise<void> {
+    await this.pool.query(
+      "DELETE FROM goal_dependencies WHERE from_goal_id = $1 AND to_goal_id = $2 AND dep_type = $3",
+      [fromGoalId, toGoalId, depType]
+    );
+  }
+
   // ── Metrics Aggregation ─────────────────────────────
 
   /**
