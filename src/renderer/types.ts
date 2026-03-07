@@ -98,6 +98,64 @@ export interface FabricSettings {
   toastNotifications: boolean;
   soundNotifications: boolean;
   showAgentMessages: boolean;
+
+  // ── Security ────────────────────────────────
+  /** Restrict which tools agents may invoke (empty = all allowed) */
+  toolAllowlist: string[];
+  /** Explicitly block specific tools */
+  toolBlocklist: string[];
+  /** Directories agents can read/write (empty = unrestricted) */
+  sandboxPaths: string[];
+  /** Block agents from accessing these paths */
+  blockedPaths: string[];
+  /** Allowed outbound domains for fetch/webhook (empty = unrestricted) */
+  allowedDomains: string[];
+  /** Require human approval for tool calls matching these patterns */
+  humanApprovalTools: string[];
+  /** Auto-redact patterns (regex) from agent output before display */
+  redactPatterns: string[];
+
+  // ── Governance ──────────────────────────────
+  /** Daily spend cap across all goals (0 = unlimited) */
+  dailySpendCapUsd: number;
+  /** Weekly spend cap across all goals (0 = unlimited) */
+  weeklySpendCapUsd: number;
+  /** Max concurrent active goals (0 = unlimited) */
+  maxConcurrentGoals: number;
+  /** Goals exceeding this cost require human approval to continue */
+  costApprovalThresholdUsd: number;
+  /** Require approval when a single goal exceeds this many turns */
+  turnApprovalThreshold: number;
+  /** Automatically pause goals after this many consecutive errors */
+  maxConsecutiveErrors: number;
+
+  // ── Access Control ──────────────────────────
+  /** SSO provider (placeholder for enterprise) */
+  ssoProvider: "none" | "okta" | "azure-ad" | "google" | "custom-saml";
+  /** SSO entity/tenant ID */
+  ssoEntityId: string;
+  /** Session timeout in minutes (0 = never) */
+  sessionTimeoutMinutes: number;
+  /** Require confirmation before starting goals */
+  requireGoalConfirmation: boolean;
+  /** IP allowlist for API server access (empty = all) */
+  apiIpAllowlist: string[];
+
+  // ── Data & Privacy ──────────────────────────
+  /** Days to retain activity/cost data (0 = forever) */
+  dataRetentionDays: number;
+  /** Enable PII detection scanning in agent output */
+  piiDetection: boolean;
+  /** Auto-redact detected PII from logs */
+  piiAutoRedact: boolean;
+  /** Disable sending file contents to API (agents can only reference paths) */
+  disableFileContentSharing: boolean;
+
+  // ── Audit ───────────────────────────────────
+  /** Enable detailed audit logging */
+  auditLogEnabled: boolean;
+  /** Webhook URL for audit events */
+  auditWebhookUrl: string;
 }
 
 export interface FabricBridge {

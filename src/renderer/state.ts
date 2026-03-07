@@ -12,6 +12,40 @@ export const DEFAULT_SETTINGS: FabricSettings = {
   toastNotifications: true,
   soundNotifications: false,
   showAgentMessages: true,
+
+  // Security
+  toolAllowlist: [],
+  toolBlocklist: [],
+  sandboxPaths: [],
+  blockedPaths: [],
+  allowedDomains: [],
+  humanApprovalTools: [],
+  redactPatterns: [],
+
+  // Governance
+  dailySpendCapUsd: 0,
+  weeklySpendCapUsd: 0,
+  maxConcurrentGoals: 0,
+  costApprovalThresholdUsd: 0,
+  turnApprovalThreshold: 0,
+  maxConsecutiveErrors: 5,
+
+  // Access Control
+  ssoProvider: "none",
+  ssoEntityId: "",
+  sessionTimeoutMinutes: 0,
+  requireGoalConfirmation: false,
+  apiIpAllowlist: [],
+
+  // Data & Privacy
+  dataRetentionDays: 0,
+  piiDetection: false,
+  piiAutoRedact: false,
+  disableFileContentSharing: false,
+
+  // Audit
+  auditLogEnabled: false,
+  auditWebhookUrl: "",
 };
 
 function loadSettings(): FabricSettings {

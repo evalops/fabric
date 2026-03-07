@@ -1044,6 +1044,161 @@ body.dark .detail-overlay::before { background: rgba(0,0,0,0.4); }
   to   { transform: translateX(0); opacity: 1; }
 }
 
+/* ── Futuristic Glow & Motion ─────────────────────── */
+
+/* Glowing pulse on active goal indicators */
+@keyframes glowPulse {
+  0%, 100% { box-shadow: 0 0 4px currentColor, 0 0 8px currentColor; }
+  50% { box-shadow: 0 0 8px currentColor, 0 0 16px currentColor, 0 0 24px rgba(96,165,250,0.15); }
+}
+.ind-active {
+  animation: glowPulse 2.5s ease-in-out infinite;
+  color: var(--blue);
+}
+
+/* Breathing glow on sidebar active goals */
+@keyframes sidebarBreathe {
+  0%, 100% { background: transparent; }
+  50% { background: var(--accent-soft); }
+}
+.sidebar-goal[data-status="active"] {
+  animation: sidebarBreathe 3s ease-in-out infinite;
+}
+.sidebar-goal[data-status="active"] .ring-fill {
+  filter: drop-shadow(0 0 3px var(--accent));
+}
+
+/* Animated gradient shimmer on progress bars */
+@keyframes progressShimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+.goal-bar-fill {
+  background: linear-gradient(90deg, var(--accent) 0%, var(--blue) 40%, var(--accent) 60%, var(--blue) 100%) !important;
+  background-size: 200% 100% !important;
+  animation: progressShimmer 3s ease-in-out infinite;
+}
+.goal-bar-fill[style*="width: 100%"],
+.goal-bar-fill[style*="width:100%"] {
+  background: var(--green) !important;
+  animation: none;
+}
+
+/* Subtle ambient glow on active goal cards */
+.goal-card[data-status="active"] {
+  border-color: rgba(96, 165, 250, 0.2);
+  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.05), inset 0 1px 0 rgba(96, 165, 250, 0.04);
+}
+body.dark .goal-card[data-status="active"] {
+  border-color: rgba(129, 140, 248, 0.25);
+  box-shadow: 0 0 12px rgba(129, 140, 248, 0.06), inset 0 1px 0 rgba(129, 140, 248, 0.05);
+}
+
+/* Running step dot glow (enhanced from basic pulse) */
+.step-dot.running {
+  box-shadow: 0 0 6px var(--blue), 0 0 12px rgba(96,165,250,0.3);
+}
+body.dark .step-dot.running {
+  box-shadow: 0 0 8px var(--blue), 0 0 16px rgba(96,165,250,0.4);
+}
+
+/* Attention badge pulsing glow */
+@keyframes badgePulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(207,34,46,0.4); }
+  50% { transform: scale(1.05); box-shadow: 0 0 0 4px rgba(207,34,46,0); }
+}
+.sidebar-badge {
+  animation: badgePulse 2s ease-in-out infinite;
+}
+
+/* Scanline shimmer for loading/waiting states */
+@keyframes scanline {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+.step-dot.waiting {
+  position: relative;
+  overflow: hidden;
+}
+
+/* Focus glow on inputs (sci-fi feel) */
+.settings-input:focus,
+.settings-select:focus,
+.cmdk-input:focus {
+  box-shadow: 0 0 0 2px rgba(99,102,241,0.15), 0 0 12px rgba(99,102,241,0.08);
+}
+body.dark .settings-input:focus,
+body.dark .settings-select:focus,
+body.dark .cmdk-input:focus {
+  box-shadow: 0 0 0 2px rgba(129,140,248,0.2), 0 0 16px rgba(129,140,248,0.1);
+}
+
+/* Enhanced dark mode ambient glow on sidebar */
+body.dark .sidebar {
+  background: linear-gradient(180deg, #161b26 0%, #131722 100%);
+  border-right-color: rgba(129,140,248,0.08);
+}
+
+/* Titlebar subtle bottom glow in dark mode */
+body.dark .titlebar {
+  border-bottom-color: rgba(129,140,248,0.1);
+  box-shadow: 0 1px 12px rgba(129,140,248,0.04);
+}
+
+/* Active sidebar item glow in dark mode */
+body.dark .sidebar-item.active {
+  box-shadow: inset 0 0 12px rgba(129,140,248,0.08);
+}
+
+/* Toast glow effect */
+body.dark .toast {
+  box-shadow: var(--shadow-md), 0 0 20px rgba(129,140,248,0.06);
+}
+
+/* Command bar glow */
+body.dark .cmdk {
+  box-shadow: var(--shadow-lg), 0 0 40px rgba(129,140,248,0.08);
+}
+
+/* Detail panel edge glow */
+body.dark .detail-panel {
+  border-left-color: rgba(129,140,248,0.1);
+  box-shadow: var(--shadow-lg), -4px 0 20px rgba(129,140,248,0.05);
+}
+
+/* Footer dot breathing for active status */
+@keyframes dotBreathe {
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px currentColor; }
+  50% { opacity: 0.6; box-shadow: 0 0 8px currentColor; }
+}
+.footer-dot[style*="green"],
+.footer-dot[style*="#2da44e"],
+.footer-dot[style*="#4ade80"] {
+  animation: dotBreathe 2s ease-in-out infinite;
+}
+
+/* Agent status dot glow when working */
+.agent-status-dot[style*="green"],
+.agent-status-dot[style*="#2da44e"],
+.agent-status-dot[style*="#4ade80"] {
+  box-shadow: 0 0 6px currentColor;
+  animation: dotBreathe 2s ease-in-out infinite;
+}
+
+/* Accent color border-glow on hovering cards in dark mode */
+body.dark .goal-card:hover {
+  border-color: rgba(129,140,248,0.2);
+  box-shadow: 0 0 16px rgba(129,140,248,0.06);
+}
+body.dark .agent-card:hover {
+  border-color: rgba(129,140,248,0.2);
+  box-shadow: 0 0 16px rgba(129,140,248,0.06);
+}
+body.dark .attention-card:hover {
+  border-color: rgba(129,140,248,0.15);
+  box-shadow: 0 0 12px rgba(129,140,248,0.05);
+}
+
 /* ── Scrollbar ─────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -1052,7 +1207,75 @@ body.dark .detail-overlay::before { background: rgba(0,0,0,0.4); }
 
 /* ── Settings View ─────────────────────────────────── */
 .settings-view {
-  max-width: 640px;
+  max-width: 720px;
+}
+
+/* Settings tabs */
+.settings-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+  overflow-x: auto;
+}
+.settings-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px 10px;
+  border: none;
+  background: none;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+.settings-tab:hover {
+  color: var(--text-secondary);
+}
+.settings-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.settings-tab-icon {
+  font-size: 14px;
+}
+.settings-tab-content {
+  min-height: 400px;
+}
+
+.settings-footer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 8px;
+}
+
+/* Textarea for list settings */
+.settings-textarea {
+  width: 280px;
+  resize: vertical;
+  min-height: 48px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px 12px;
+}
+
+/* Template row */
+.template-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
 }
 
 .settings-card {
