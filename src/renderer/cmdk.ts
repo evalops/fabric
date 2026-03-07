@@ -18,6 +18,29 @@ function getCmdkActions(query: string): { group: string; items: CmdkAction[] }[]
     }];
   }
 
+  // Steering: "steer: <message>" sends to the first active goal
+  const steerMatch = q.match(/^steer:?\s*(.+)/);
+  if (steerMatch) {
+    const activeGoals = state.goals.filter(g => g.status === "active");
+    if (activeGoals.length === 0) {
+      return [{ group: "Steering", items: [{ icon: "\u2192", text: "No active goals to steer", hint: "", action: () => closeCmdk() }] }];
+    }
+    return [{
+      group: "Steering",
+      items: activeGoals.map(g => ({
+        icon: "\u2192",
+        text: `Steer "${g.title}": ${steerMatch[1]}`,
+        hint: "enter to send",
+        action: () => {
+          closeCmdk();
+          const bridge = (window as any).fabric;
+          if (bridge?.steerGoal) bridge.steerGoal(g.id, steerMatch[1]);
+          else showToast("Steering", `"${steerMatch[1]}" \u2192 ${g.title}`, "var(--blue)");
+        },
+      })),
+    }];
+  }
+
   const commandActions: CmdkAction[] = [];
   if (q.includes("pause") || q.includes("stop")) {
     commandActions.push({ icon: "\u23f8", text: "Pause all active deployments", hint: "command", action: () => { closeCmdk(); showToast("Deployments paused", "All active deployments have been paused", "var(--amber)"); state.activityLog.unshift({ time: Date.now(), text: "<strong>you</strong> paused all active deployments" }); } });
@@ -130,7 +153,7 @@ function getSmartResponse(query: string): string {
     const working = state.agents.filter(a => a.status === "working").length;
     return `<strong>${active} goals active</strong>, ${blocked} blocked. ${working} agents working, ${state.agents.length - working} idle. Spend today: <strong>$${getTotalCost().toFixed(2)}</strong>. ${state.attentionItems.length} items need your attention.`;
   }
-  return `Try: <strong>"status"</strong> for an overview, a goal name, <strong>"create: [description]"</strong> to start a new goal, <strong>"rollback"</strong> or <strong>"pause"</strong> for commands, or <strong>"dark mode"</strong>.`;
+  return `Try: <strong>"status"</strong> for an overview, a goal name, <strong>"create: [description]"</strong> to start a new goal, <strong>"steer: [message]"</strong> to redirect an active goal, <strong>"pause"</strong> for commands, or <strong>"dark mode"</strong>.`;
 }
 
 export function openCmdk(): void {

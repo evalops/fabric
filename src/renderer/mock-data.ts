@@ -368,6 +368,9 @@ export function initMockData(): void {
     enables: _goalInterconnections[g.id]?.enables || [],
     insights: _goalInterconnections[g.id]?.insights || [],
     areasAffected: _goalInterconnections[g.id]?.areasAffected || [],
+    turnCount: Math.floor(Math.random() * 20) + 5,
+    toolCalls: [],
+    retryCount: 0,
   }));
 
   state.attentionItems = [

@@ -65,6 +65,7 @@ async function createGoalFromNL(description: string): Promise<void> {
       timeline: [{ time: Date.now(), text: `Goal created by <strong>you</strong>` }],
       costUsd: 0, inputTokens: 0, outputTokens: 0, startedAt: Date.now(),
       blockedBy: [], enables: [], insights: [], areasAffected: [],
+      turnCount: 0, toolCalls: [], retryCount: 0,
     };
     state.goals.unshift(placeholder);
     state.activityLog.unshift({ time: Date.now(), text: `<strong>you</strong> created goal: "${title}"` });
@@ -90,6 +91,7 @@ async function createGoalFromNL(description: string): Promise<void> {
       ],
       costUsd: 0, inputTokens: 0, outputTokens: 0, startedAt: Date.now(),
       blockedBy: [], enables: [], insights: [], areasAffected: [],
+      turnCount: 0, toolCalls: [], retryCount: 0,
     };
 
     state.goals.unshift(newGoal);

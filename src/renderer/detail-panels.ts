@@ -1,5 +1,79 @@
 import { state, callbacks } from './state';
 import { relativeTime, stringToColor, formatTokens, formatDuration } from './utils';
+import type { Goal, ToolCallRecord } from './types';
+
+function renderToolBreakdown(toolCalls: ToolCallRecord[]): string {
+  if (toolCalls.length === 0) return "";
+  const breakdown: Record<string, { count: number; totalMs: number; errors: number }> = {};
+  for (const call of toolCalls) {
+    if (!breakdown[call.tool]) breakdown[call.tool] = { count: 0, totalMs: 0, errors: 0 };
+    breakdown[call.tool].count++;
+    breakdown[call.tool].totalMs += call.durationMs;
+    if (!call.success) breakdown[call.tool].errors++;
+  }
+  const sorted = Object.entries(breakdown).sort((a, b) => b[1].count - a[1].count);
+  return `
+    <div class="detail-section-title">Tool breakdown</div>
+    <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; font-size: 12px;">
+      ${sorted.map(([tool, stats]) => `
+        <div style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--bg-surface); border-radius: var(--radius-xs); border: 1px solid var(--border);">
+          <span style="font-weight: 600; min-width: 80px;">${tool}</span>
+          <span style="color: var(--text-muted);">${stats.count} call${stats.count !== 1 ? "s" : ""}</span>
+          <span style="color: var(--text-muted);">${Math.round(stats.totalMs / stats.count)}ms avg</span>
+          ${stats.errors > 0 ? `<span style="color: var(--red); margin-left: auto;">${stats.errors} error${stats.errors !== 1 ? "s" : ""}</span>` : `<span style="color: var(--green); margin-left: auto;">ok</span>`}
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderObservabilityMeta(goal: Goal): string {
+  const parts: string[] = [];
+  if (goal.turnCount > 0) {
+    parts.push(`
+      <div class="detail-meta-item">
+        <span class="detail-meta-label">Turns</span>
+        <span class="detail-meta-value">${goal.turnCount}</span>
+      </div>
+    `);
+  }
+  if (goal.outcome) {
+    const outcomeColors: Record<string, string> = {
+      success: "var(--green)", budget_exhausted: "var(--amber)",
+      turns_exhausted: "var(--amber)", user_abort: "var(--text-muted)", error: "var(--red)",
+    };
+    const label = goal.outcome.replace(/_/g, " ");
+    parts.push(`
+      <div class="detail-meta-item">
+        <span class="detail-meta-label">Outcome</span>
+        <span class="detail-meta-value" style="color: ${outcomeColors[goal.outcome] || "inherit"};">${label}</span>
+      </div>
+    `);
+  }
+  if (goal.retryCount > 0) {
+    parts.push(`
+      <div class="detail-meta-item">
+        <span class="detail-meta-label">Retries</span>
+        <span class="detail-meta-value" style="color: var(--amber);">${goal.retryCount}</span>
+      </div>
+    `);
+  }
+  return parts.join("");
+}
+
+function renderSteeringInput(goalId: string): string {
+  // Only show for active goals
+  const goal = state.goals.find(g => g.id === goalId);
+  if (!goal || goal.status !== "active") return "";
+  return `
+    <div class="detail-section-title">Steer this goal</div>
+    <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+      <input type="text" id="steering-input" placeholder="Redirect the agent..." style="flex: 1; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-surface); color: var(--text-primary); font-size: 13px; outline: none;" />
+      <button id="steering-send" style="padding: 8px 16px; background: var(--accent); color: white; border: none; border-radius: var(--radius-sm); font-size: 13px; cursor: pointer; font-weight: 500;">Send</button>
+    </div>
+    ${goal.lastError ? `<div style="font-size: 12px; color: var(--red); margin-bottom: 16px; padding: 8px 12px; background: var(--bg-surface); border: 1px solid var(--red); border-radius: var(--radius-xs);">Last error: ${goal.lastError}</div>` : ""}
+  `;
+}
 
 export function openAgentDetail(agentId: string): void {
   const agent = state.agents.find(a => a.id === agentId);
@@ -168,6 +242,14 @@ export function openGoalDetail(goalId: string): void {
       </div>
     </div>
 
+    ${(goal.turnCount > 0 || goal.outcome || goal.retryCount > 0) ? `
+    <div class="detail-meta" style="margin-top: 0;">
+      ${renderObservabilityMeta(goal)}
+    </div>
+    ` : ""}
+
+    ${renderSteeringInput(goal.id)}
+
     ${uniqueAgents.length > 0 ? `
       <div class="detail-section-title">Agents</div>
       <div class="agent-roster">
@@ -260,6 +342,8 @@ export function openGoalDetail(goalId: string): void {
       `;
     })() : ""}
 
+    ${renderToolBreakdown(goal.toolCalls)}
+
     <div class="detail-section-title" style="margin-top: 8px;">Timeline</div>
     ${(() => {
       const relatedGoalIds = [...goal.blockedBy, ...goal.enables, ...goal.insights.map(i => i.fromGoalId)];
@@ -302,6 +386,25 @@ export function openGoalDetail(goalId: string): void {
       if (gid) { closeDetail(); setTimeout(() => openGoalDetail(gid), 200); }
     });
   });
+
+  // Wire steering input
+  const steeringInput = panel.querySelector("#steering-input") as HTMLInputElement | null;
+  const steeringSend = panel.querySelector("#steering-send");
+  if (steeringInput && steeringSend) {
+    const sendSteering = () => {
+      const msg = steeringInput.value.trim();
+      if (!msg) return;
+      const bridge = (window as any).fabric;
+      if (bridge?.steerGoal) {
+        bridge.steerGoal(goalId, msg);
+      }
+      steeringInput.value = "";
+    };
+    steeringSend.addEventListener("click", sendSteering);
+    steeringInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") sendSteering();
+    });
+  }
 }
 
 export function closeDetail(): void {

@@ -1,5 +1,6 @@
 export type GoalStatus = "active" | "complete" | "blocked" | "failed";
-export type StepState = "done" | "running" | "waiting" | "warn";
+export type StepState = "done" | "running" | "waiting" | "failed" | "warn";
+export type GoalOutcome = "success" | "budget_exhausted" | "turns_exhausted" | "user_abort" | "error";
 
 export interface Step {
   name: string;
@@ -7,6 +8,14 @@ export interface Step {
   agent?: string;
   detail?: string;
   time?: number;
+}
+
+export interface ToolCallRecord {
+  tool: string;
+  startedAt: number;
+  durationMs: number;
+  success: boolean;
+  goalId: string;
 }
 
 export interface Goal {
@@ -27,6 +36,13 @@ export interface Goal {
   enables: string[];
   insights: Insight[];
   areasAffected: string[];
+  // Observability (synced from FabricGoal)
+  turnCount: number;
+  toolCalls: ToolCallRecord[];
+  outcome?: GoalOutcome;
+  retryCount: number;
+  lastError?: string;
+  sessionId?: string;
 }
 
 export interface Insight {
@@ -89,6 +105,7 @@ export interface FabricBridge {
   getGoals(): Promise<any[]>;
   getGoal(goalId: string): Promise<any>;
   pauseGoal(goalId: string): Promise<{ success: boolean }>;
+  steerGoal(goalId: string, message: string): Promise<{ success: boolean }>;
   onEvent(callback: (event: any) => void): () => void;
   updateSettings(settings: { apiKey?: string; model?: string; maxBudgetUsd?: number; maxTurns?: number }): Promise<{ success: boolean }>;
 }
