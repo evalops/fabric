@@ -43,10 +43,38 @@ function getCmdkActions(query: string): { group: string; items: CmdkAction[] }[]
 
   const commandActions: CmdkAction[] = [];
   if (q.includes("pause") || q.includes("stop")) {
-    commandActions.push({ icon: "\u23f8", text: "Pause all active deployments", hint: "command", action: () => { closeCmdk(); showToast("Deployments paused", "All active deployments have been paused", "var(--amber)"); state.activityLog.unshift({ time: Date.now(), text: "<strong>you</strong> paused all active deployments" }); } });
-  }
-  if (q.includes("rollback") || q.includes("revert")) {
-    commandActions.push({ icon: "\u21a9", text: "Rollback Deploy v2.3", hint: "command", action: () => { closeCmdk(); showToast("Rolling back", "Deploy v2.3 canary is being rolled back", "var(--red)"); state.activityLog.unshift({ time: Date.now(), text: "<strong>you</strong> triggered rollback on Deploy v2.3" }); } });
+    // Per-goal pause for active goals
+    const activeGoals = state.goals.filter(g => g.status === "active");
+    if (activeGoals.length > 0) {
+      activeGoals.forEach(g => {
+        commandActions.push({
+          icon: "\u23f8",
+          text: `Pause "${g.title}"`,
+          hint: `${Math.round(g.progress)}%`,
+          action: () => {
+            closeCmdk();
+            const bridge = (window as any).fabric;
+            if (bridge?.pauseGoal) bridge.pauseGoal(g.id);
+            showToast("Goal paused", `"${g.title}" has been paused`, "var(--amber)");
+            state.activityLog.unshift({ time: Date.now(), text: `<strong>you</strong> paused "${g.title}"` });
+          },
+        });
+      });
+      if (activeGoals.length > 1) {
+        commandActions.push({
+          icon: "\u23f8",
+          text: `Pause all ${activeGoals.length} active goals`,
+          hint: "command",
+          action: () => {
+            closeCmdk();
+            const bridge = (window as any).fabric;
+            activeGoals.forEach(g => { if (bridge?.pauseGoal) bridge.pauseGoal(g.id); });
+            showToast("All paused", `${activeGoals.length} active goals have been paused`, "var(--amber)");
+            state.activityLog.unshift({ time: Date.now(), text: `<strong>you</strong> paused all ${activeGoals.length} active goals` });
+          },
+        });
+      }
+    }
   }
   if (q.includes("budget") || q.includes("spend") || q.includes("cost")) {
     commandActions.push({ icon: "$", text: `Today's spend: $${getTotalCost().toFixed(2)}`, hint: "info", action: () => { closeCmdk(); callbacks.switchView("costs"); } });
@@ -135,23 +163,29 @@ export function renderCmdkResults(query: string): void {
 
 function getSmartResponse(query: string): string {
   const q = query.toLowerCase();
-  if (q.includes("deploy") || q.includes("v2.3") || q.includes("canary")) {
-    return `<strong>Deploy v2.3</strong> is ${Math.round(state.goals[0].progress)}% complete. Canary is running at 5% traffic in us-east-1 with a 0.03% error rate (threshold: 0.1%). 3 agents working on it.<br><br><span class="cmdk-response-action" data-goal="g1">View goal \u2192</span>`;
+
+  // Dynamic goal search — find goals matching any words in the query
+  const words = q.split(/\s+/).filter(w => w.length > 2);
+  const matchedGoal = state.goals.find(g =>
+    words.some(w => g.title.toLowerCase().includes(w) || g.summary.toLowerCase().includes(w))
+  );
+  if (matchedGoal) {
+    const doneSteps = matchedGoal.steps.filter(s => s.state === "done").length;
+    const totalSteps = matchedGoal.steps.length;
+    const stepsInfo = totalSteps > 0 ? ` ${doneSteps}/${totalSteps} steps complete.` : "";
+    const outcomeInfo = matchedGoal.outcome ? ` Outcome: ${matchedGoal.outcome.replace(/_/g, " ")}.` : "";
+    const retryInfo = matchedGoal.retryCount > 0 ? ` (${matchedGoal.retryCount} retries)` : "";
+    return `<strong>${matchedGoal.title}</strong> is ${Math.round(matchedGoal.progress)}% complete (${matchedGoal.status}).${stepsInfo}${outcomeInfo}${retryInfo} Cost: $${matchedGoal.costUsd.toFixed(2)}, ${matchedGoal.turnCount} turns.<br><br><span class="cmdk-response-action" data-goal="${matchedGoal.id}">View goal \u2192</span>`;
   }
-  if (q.includes("billing") || q.includes("anomaly")) {
-    return `The <strong>billing investigation</strong> is ${Math.round(state.goals[1].progress)}% complete. 3 suspicious clusters found in Q1 data. Next step: cross-reference with promos.<br><br><span class="cmdk-response-action" data-goal="g2">View goal \u2192</span>`;
-  }
-  if (q.includes("auth") || q.includes("oauth")) {
-    return `The <strong>OAuth 2.1 refactor</strong> is blocked at ${Math.round(state.goals[2].progress)}%. Waiting on auth-sdk v4. Migration plan approved.<br><br><span class="cmdk-response-action" data-goal="g3">View goal \u2192</span>`;
-  }
-  if (q.includes("latency") || q.includes("p95")) {
-    return `<strong>API latency</strong> optimization is ${Math.round(state.goals[3].progress)}% complete. Current P95: 187ms (target: 200ms). Load test in progress.<br><br><span class="cmdk-response-action" data-goal="g4">View goal \u2192</span>`;
-  }
+
   if (q.includes("status") || q.includes("overview") || q.includes("how") || q.includes("what")) {
     const active = state.goals.filter(g => g.status === "active").length;
     const blocked = state.goals.filter(g => g.status === "blocked").length;
+    const failed = state.goals.filter(g => g.status === "failed").length;
     const working = state.agents.filter(a => a.status === "working").length;
-    return `<strong>${active} goals active</strong>, ${blocked} blocked. ${working} agents working, ${state.agents.length - working} idle. Spend today: <strong>$${getTotalCost().toFixed(2)}</strong>. ${state.attentionItems.length} items need your attention.`;
+    const totalRetries = state.goals.reduce((sum, g) => sum + (g.retryCount || 0), 0);
+    const retryNote = totalRetries > 0 ? ` ${totalRetries} retries in flight.` : "";
+    return `<strong>${active} goals active</strong>, ${blocked} blocked${failed > 0 ? `, ${failed} failed` : ""}. ${working} agents working, ${state.agents.length - working} idle. Spend today: <strong>$${getTotalCost().toFixed(2)}</strong>. ${state.attentionItems.length} items need your attention.${retryNote}`;
   }
   return `Try: <strong>"status"</strong> for an overview, a goal name, <strong>"create: [description]"</strong> to start a new goal, <strong>"steer: [message]"</strong> to redirect an active goal, <strong>"pause"</strong> for commands, or <strong>"dark mode"</strong>.`;
 }
