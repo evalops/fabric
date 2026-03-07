@@ -10,6 +10,7 @@ import * as http from "http";
 import * as url from "url";
 import { FabricEngine, FabricEvent } from "./fabric";
 import { FabricDB } from "./db/persistence";
+import { createWebhookExtension, WebhookConfig } from "./extensions/webhook";
 
 // ── Configuration ─────────────────────────────────────
 
@@ -259,15 +260,40 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
-  // POST /api/goals — Create a new goal
+  // POST /api/goals — Create a new goal (supports per-goal model override)
   if (path === "/api/goals" && method === "POST") {
     const body = await parseBody(req);
     if (!body.description) {
       json(res, { error: "description is required" }, 400);
       return;
     }
-    const id = await engine.createGoal(body.description);
+    const id = await engine.createGoal({
+      description: body.description,
+      model: body.model,
+      maxBudgetUsd: body.maxBudgetUsd,
+      maxTurns: body.maxTurns,
+    });
     json(res, { id, status: "created" }, 201);
+    return;
+  }
+
+  // POST /api/goals/batch — Create multiple goals at once
+  if (path === "/api/goals/batch" && method === "POST") {
+    const body = await parseBody(req);
+    if (!Array.isArray(body.descriptions) || body.descriptions.length === 0) {
+      json(res, { error: "descriptions array is required" }, 400);
+      return;
+    }
+    if (body.descriptions.length > 20) {
+      json(res, { error: "maximum 20 goals per batch" }, 400);
+      return;
+    }
+    const result = await engine.createBatchGoals(body.descriptions, {
+      model: body.model,
+      maxBudgetUsd: body.maxBudgetUsd,
+      maxTurns: body.maxTurns,
+    });
+    json(res, result, 201);
     return;
   }
 
@@ -446,6 +472,95 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     const body = await parseBody(req);
     engine.updateSettings(body);
     json(res, { status: "updated" });
+    return;
+  }
+
+  // ── Webhooks ───────────────────────────────────────
+
+  // POST /api/webhooks — Register a webhook extension
+  if (path === "/api/webhooks" && method === "POST") {
+    const body = await parseBody(req) as WebhookConfig;
+    if (!body.url) {
+      json(res, { error: "url is required" }, 400);
+      return;
+    }
+    try {
+      const ext = createWebhookExtension(body);
+      engine.registerExtension(ext);
+      json(res, { status: "webhook registered", name: ext.name }, 201);
+    } catch (err: any) {
+      json(res, { error: err.message }, 400);
+    }
+    return;
+  }
+
+  // GET /api/webhooks — List registered webhook extensions
+  if (path === "/api/webhooks" && method === "GET") {
+    const webhooks = engine.getExtensions().filter(n => n.startsWith("webhook-"));
+    json(res, { webhooks });
+    return;
+  }
+
+  // ── Export ─────────────────────────────────────────
+
+  // GET /api/export/goals — Export all goals as JSON
+  if (path === "/api/export/goals" && method === "GET") {
+    const format = parsed.query.format as string || "json";
+    const goals = db ? await db.listGoals({ limit: 1000 }) : engine.getGoals();
+    if (format === "csv") {
+      const header = "id,title,status,outcome,progress,cost_usd,input_tokens,output_tokens,turn_count,started_at,completed_at";
+      const rows = goals.map((g: any) => {
+        const id = g.id;
+        const title = `"${(g.title || "").replace(/"/g, '""')}"`;
+        const status = g.status;
+        const outcome = g.outcome || "";
+        const progress = g.progress ?? 0;
+        const cost = g.cost_usd ?? g.costUsd ?? 0;
+        const inputTokens = g.input_tokens ?? g.inputTokens ?? 0;
+        const outputTokens = g.output_tokens ?? g.outputTokens ?? 0;
+        const turns = g.turn_count ?? g.turnCount ?? 0;
+        const started = g.started_at ?? new Date(g.startedAt).toISOString();
+        const completed = g.completed_at ?? (g.completedAt ? new Date(g.completedAt).toISOString() : "");
+        return `${id},${title},${status},${outcome},${progress},${cost},${inputTokens},${outputTokens},${turns},${started},${completed}`;
+      });
+      res.writeHead(200, {
+        "Content-Type": "text/csv",
+        "Content-Disposition": `attachment; filename="fabric-goals-${new Date().toISOString().slice(0, 10)}.csv"`,
+        "Access-Control-Allow-Origin": "*",
+      });
+      res.end([header, ...rows].join("\n"));
+    } else {
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Content-Disposition": `attachment; filename="fabric-goals-${new Date().toISOString().slice(0, 10)}.json"`,
+        "Access-Control-Allow-Origin": "*",
+      });
+      res.end(JSON.stringify(goals, null, 2));
+    }
+    return;
+  }
+
+  // GET /api/export/costs — Export cost events as CSV/JSON
+  if (path === "/api/export/costs" && method === "GET") {
+    if (!db) {
+      json(res, { error: "No database configured for cost export" }, 400);
+      return;
+    }
+    const hours = parseInt(parsed.query.hours as string) || 24;
+    const data = await db.getHourlySpend(hours);
+    const format = parsed.query.format as string || "json";
+    if (format === "csv") {
+      const header = "hour,spend,input_tokens,output_tokens";
+      const rows = data.map((r: any) => `${r.hour},${r.spend},${r.input_tokens},${r.output_tokens}`);
+      res.writeHead(200, {
+        "Content-Type": "text/csv",
+        "Content-Disposition": `attachment; filename="fabric-costs-${new Date().toISOString().slice(0, 10)}.csv"`,
+        "Access-Control-Allow-Origin": "*",
+      });
+      res.end([header, ...rows].join("\n"));
+    } else {
+      json(res, data);
+    }
     return;
   }
 

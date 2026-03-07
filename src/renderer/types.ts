@@ -101,7 +101,8 @@ export interface FabricSettings {
 }
 
 export interface FabricBridge {
-  createGoal(description: string): Promise<{ success: boolean; goalId?: string; error?: string }>;
+  createGoal(descriptionOrOpts: string | { description: string; model?: string; maxBudgetUsd?: number; maxTurns?: number }): Promise<{ success: boolean; goalId?: string; error?: string }>;
+  createBatchGoals(descriptions: string[], opts?: { model?: string; maxBudgetUsd?: number; maxTurns?: number }): Promise<{ success: boolean; batchId?: string; goalIds?: string[]; error?: string }>;
   getGoals(): Promise<any[]>;
   getGoal(goalId: string): Promise<any>;
   pauseGoal(goalId: string): Promise<{ success: boolean }>;
@@ -109,6 +110,16 @@ export interface FabricBridge {
   steerGoal(goalId: string, message: string): Promise<{ success: boolean }>;
   onEvent(callback: (event: any) => void): () => void;
   updateSettings(settings: { apiKey?: string; model?: string; maxBudgetUsd?: number; maxTurns?: number }): Promise<{ success: boolean }>;
+}
+
+export interface GoalTemplate {
+  id: string;
+  name: string;
+  description: string;
+  model?: string;
+  maxBudgetUsd?: number;
+  maxTurns?: number;
+  createdAt: number;
 }
 
 export interface CmdkAction {

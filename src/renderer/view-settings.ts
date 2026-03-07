@@ -1,4 +1,4 @@
-import { state, DEFAULT_SETTINGS, saveSettings } from './state';
+import { state, DEFAULT_SETTINGS, saveSettings, saveTemplates } from './state';
 
 function showSettingsSaved(): void {
   const el = document.querySelector(".settings-saved");
@@ -113,6 +113,38 @@ export function renderSettings(): void {
       </div>
     </div>
 
+    <div class="settings-card">
+      <div class="settings-card-header">
+        <div class="settings-card-title">Goal Templates</div>
+        <div class="settings-card-desc">Save and reuse common goal patterns. Create templates via command palette: "save template: description"</div>
+      </div>
+      ${state.templates.length === 0
+        ? `<div style="color: var(--text-muted); font-size: 13px; padding: 8px 0;">No templates yet. Use the command palette (Cmd+K) and type "save template: your goal description" to create one.</div>`
+        : `<div style="display: flex; flex-direction: column; gap: 4px;">
+        ${state.templates.map(t => `
+          <div style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-surface); border-radius: var(--radius-sm); border: 1px solid var(--border);">
+            <span style="font-size: 13px; flex: 1;">${t.name}</span>
+            ${t.model ? `<span style="font-size: 11px; color: var(--text-muted);">${t.model}</span>` : ""}
+            <button class="template-use-btn" data-template-id="${t.id}" style="padding: 4px 10px; font-size: 11px; background: var(--accent); color: white; border: none; border-radius: var(--radius-xs); cursor: pointer;">Use</button>
+            <button class="template-delete-btn" data-template-id="${t.id}" style="padding: 4px 8px; font-size: 11px; background: transparent; color: var(--red); border: 1px solid var(--red); border-radius: var(--radius-xs); cursor: pointer;">\u00d7</button>
+          </div>
+        `).join("")}
+      </div>`
+      }
+    </div>
+
+    <div class="settings-card">
+      <div class="settings-card-header">
+        <div class="settings-card-title">Export</div>
+        <div class="settings-card-desc">Download your data for analysis or backup</div>
+      </div>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <button class="settings-reset" id="export-goals-json" style="background: var(--accent); color: white; border: none;">Export Goals (JSON)</button>
+        <button class="settings-reset" id="export-goals-csv" style="background: var(--accent); color: white; border: none;">Export Goals (CSV)</button>
+        <button class="settings-reset" id="export-activity-json" style="background: var(--bg-surface); color: var(--text-primary);">Export Activity (JSON)</button>
+      </div>
+    </div>
+
     <div style="display: flex; align-items: center; justify-content: space-between;">
       <button class="settings-reset" id="settings-reset">Reset all settings to defaults</button>
       <span class="settings-saved">Saved</span>
@@ -188,4 +220,59 @@ export function renderSettings(): void {
     renderSettings();
     showSettingsSaved();
   });
+
+  // Template buttons
+  feed.querySelectorAll(".template-use-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = (btn as HTMLElement).dataset.templateId;
+      const template = state.templates.find(t => t.id === id);
+      if (template) {
+        const bridge = (window as any).fabric;
+        if (bridge?.createGoal) {
+          bridge.createGoal(template.description);
+          showSettingsSaved();
+        }
+      }
+    });
+  });
+
+  feed.querySelectorAll(".template-delete-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = (btn as HTMLElement).dataset.templateId;
+      state.templates = state.templates.filter(t => t.id !== id);
+      saveTemplates();
+      renderSettings();
+    });
+  });
+
+  // Export buttons
+  document.getElementById("export-goals-json")?.addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify(state.goals, null, 2)], { type: "application/json" });
+    downloadBlob(blob, `fabric-goals-${new Date().toISOString().slice(0, 10)}.json`);
+  });
+
+  document.getElementById("export-goals-csv")?.addEventListener("click", () => {
+    const header = "id,title,status,outcome,progress,costUsd,inputTokens,outputTokens,turnCount,retryCount";
+    const rows = state.goals.map(g =>
+      `${g.id},"${g.title.replace(/"/g, '""')}",${g.status},${g.outcome || ""},${g.progress},${g.costUsd},${g.inputTokens},${g.outputTokens},${g.turnCount},${g.retryCount}`
+    );
+    const blob = new Blob([[header, ...rows].join("\n")], { type: "text/csv" });
+    downloadBlob(blob, `fabric-goals-${new Date().toISOString().slice(0, 10)}.csv`);
+  });
+
+  document.getElementById("export-activity-json")?.addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify(state.activityLog, null, 2)], { type: "application/json" });
+    downloadBlob(blob, `fabric-activity-${new Date().toISOString().slice(0, 10)}.json`);
+  });
+}
+
+function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }

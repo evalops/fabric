@@ -1,5 +1,5 @@
 import type { CmdkAction } from './types';
-import { state, getTotalCost, callbacks, toggleDarkMode } from './state';
+import { state, getTotalCost, callbacks, toggleDarkMode, saveTemplates } from './state';
 import { showToast } from './toasts';
 
 function getCmdkActions(query: string): { group: string; items: CmdkAction[] }[] {
@@ -15,6 +15,67 @@ function getCmdkActions(query: string): { group: string; items: CmdkAction[] }[]
         hint: "enter to create",
         action: () => { closeCmdk(); callbacks.switchView("__create:" + createMatch[1]); },
       }],
+    }];
+  }
+
+  // Batch creation: "batch: desc1 | desc2 | desc3"
+  const batchMatch = q.match(/^batch:?\s*(.+)/);
+  if (batchMatch) {
+    const descriptions = batchMatch[1].split("|").map(d => d.trim()).filter(Boolean);
+    if (descriptions.length >= 2) {
+      return [{
+        group: "Batch create",
+        items: [{
+          icon: "\u229e",
+          text: `Create ${descriptions.length} goals in batch`,
+          hint: "enter to create all",
+          action: () => {
+            closeCmdk();
+            const bridge = (window as any).fabric;
+            if (bridge?.createGoal) {
+              descriptions.forEach(d => bridge.createGoal(d));
+              showToast("Batch created", `${descriptions.length} goals launched`, "var(--accent)");
+            }
+          },
+        }],
+      }];
+    }
+  }
+
+  // Template: "save template: name" saves current query as template
+  const saveTemplateMatch = q.match(/^save\s+template:?\s*(.+)/);
+  if (saveTemplateMatch) {
+    return [{
+      group: "Templates",
+      items: [{
+        icon: "\u2606",
+        text: `Save template: "${saveTemplateMatch[1]}"`,
+        hint: "saves for reuse",
+        action: () => {
+          closeCmdk();
+          state.templates.push({
+            id: `tmpl-${Date.now()}`,
+            name: saveTemplateMatch[1],
+            description: saveTemplateMatch[1],
+            createdAt: Date.now(),
+          });
+          saveTemplates();
+          showToast("Template saved", `"${saveTemplateMatch[1]}" saved`, "var(--accent)");
+        },
+      }],
+    }];
+  }
+
+  // Show templates when user types "template"
+  if (q.includes("template") && state.templates.length > 0) {
+    return [{
+      group: "Templates",
+      items: state.templates.map(t => ({
+        icon: "\u2605",
+        text: t.name,
+        hint: "template",
+        action: () => { closeCmdk(); callbacks.switchView("__create:" + t.description); },
+      })),
     }];
   }
 

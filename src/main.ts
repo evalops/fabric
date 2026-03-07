@@ -27,11 +27,21 @@ function createWindow(): void {
 
 // ── IPC Handlers ──────────────────────────────────────
 
-// Create a new goal from natural language
-ipcMain.handle("fabric:create-goal", async (_event, description: string) => {
+// Create a new goal from natural language (supports model/budget overrides)
+ipcMain.handle("fabric:create-goal", async (_event, descriptionOrOpts: any) => {
   try {
-    const goalId = await engine.createGoal(description);
+    const goalId = await engine.createGoal(descriptionOrOpts);
     return { success: true, goalId };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+});
+
+// Create a batch of goals
+ipcMain.handle("fabric:create-batch-goals", async (_event, descriptions: string[], opts?: { model?: string; maxBudgetUsd?: number; maxTurns?: number }) => {
+  try {
+    const result = await engine.createBatchGoals(descriptions, opts as any);
+    return { success: true, ...result };
   } catch (err: any) {
     return { success: false, error: err.message };
   }

@@ -1,5 +1,6 @@
-import { state, callbacks } from './state';
+import { state, callbacks, saveTemplates } from './state';
 import { relativeTime, stringToColor, formatTokens, formatDuration } from './utils';
+import { showToast } from './toasts';
 import type { Goal, ToolCallRecord } from './types';
 
 function renderToolBreakdown(toolCalls: ToolCallRecord[]): string {
@@ -353,6 +354,10 @@ export function openGoalDetail(goalId: string): void {
 
     ${renderToolBreakdown(goal.toolCalls)}
 
+    <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+      <button id="save-template-btn" style="padding: 6px 14px; font-size: 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; color: var(--text-secondary);">Save as template</button>
+    </div>
+
     <div class="detail-section-title" style="margin-top: 8px;">Timeline</div>
     ${(() => {
       const relatedGoalIds = [...goal.blockedBy, ...goal.enables, ...goal.insights.map(i => i.fromGoalId)];
@@ -424,6 +429,23 @@ export function openGoalDetail(goalId: string): void {
         bridge.resumeGoal(goalId);
         closeDetail();
       }
+    });
+  }
+
+  // Wire save as template
+  const saveTemplateBtn = panel.querySelector("#save-template-btn");
+  if (saveTemplateBtn) {
+    saveTemplateBtn.addEventListener("click", () => {
+      state.templates.push({
+        id: `tmpl-${Date.now()}`,
+        name: goal.title,
+        description: goal.title,
+        createdAt: Date.now(),
+      });
+      saveTemplates();
+      showToast("Template saved", `"${goal.title}" saved as template`, "var(--accent)");
+      (saveTemplateBtn as HTMLButtonElement).disabled = true;
+      (saveTemplateBtn as HTMLButtonElement).textContent = "Saved";
     });
   }
 }

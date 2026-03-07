@@ -1,9 +1,13 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("fabric", {
-  // Create a new goal from natural language
-  createGoal: (description: string) =>
-    ipcRenderer.invoke("fabric:create-goal", description),
+  // Create a new goal from natural language (supports model/budget overrides)
+  createGoal: (descriptionOrOpts: string | { description: string; model?: string; maxBudgetUsd?: number; maxTurns?: number }) =>
+    ipcRenderer.invoke("fabric:create-goal", descriptionOrOpts),
+
+  // Create a batch of goals
+  createBatchGoals: (descriptions: string[], opts?: { model?: string; maxBudgetUsd?: number; maxTurns?: number }) =>
+    ipcRenderer.invoke("fabric:create-batch-goals", descriptions, opts),
 
   // Get all goals
   getGoals: () =>

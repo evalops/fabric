@@ -47,6 +47,18 @@ export interface FabricGoal {
   // Retry tracking (inspired by pi-mono)
   retryCount: number;
   lastError?: string;
+  // Per-goal model override
+  model?: "sonnet" | "opus" | "haiku";
+  // Batch tracking
+  batchId?: string;
+}
+
+export interface GoalCreateOptions {
+  description: string;
+  model?: "sonnet" | "opus" | "haiku";
+  maxBudgetUsd?: number;
+  maxTurns?: number;
+  batchId?: string;
 }
 
 export type GoalOutcome = "success" | "budget_exhausted" | "turns_exhausted" | "user_abort" | "error";
@@ -244,10 +256,16 @@ export class FabricEngine extends EventEmitter {
 
   /**
    * Create a new goal from natural language and start agent execution.
+   * Accepts either a plain string or a GoalCreateOptions object for
+   * per-goal model override, budget override, and batch tracking.
    */
-  async createGoal(description: string): Promise<string> {
+  async createGoal(descriptionOrOpts: string | GoalCreateOptions): Promise<string> {
+    const opts: GoalCreateOptions = typeof descriptionOrOpts === "string"
+      ? { description: descriptionOrOpts }
+      : descriptionOrOpts;
+
     const id = `goal-${++this.goalCounter}-${Date.now()}`;
-    const title = description.charAt(0).toUpperCase() + description.slice(1);
+    const title = opts.description.charAt(0).toUpperCase() + opts.description.slice(1);
 
     const goal: FabricGoal = {
       id,
@@ -267,6 +285,8 @@ export class FabricEngine extends EventEmitter {
       turnCount: 0,
       toolCalls: [],
       retryCount: 0,
+      model: opts.model,
+      batchId: opts.batchId,
     };
 
     this.goals.set(id, goal);
@@ -282,8 +302,10 @@ export class FabricEngine extends EventEmitter {
       data: { title: "Goal created", body: `"${title}" — agents are picking it up`, color: "var(--accent)" },
     });
 
-    // Start agent execution in the background
-    this.executeGoal(id, description).catch(err => {
+    // Start agent execution in the background with optional overrides
+    const budget = opts.maxBudgetUsd ?? this.defaultBudget;
+    const turns = opts.maxTurns ?? this.defaultMaxTurns;
+    this.executeGoal(id, opts.description, { model: opts.model, maxBudgetUsd: budget, maxTurns: turns }).catch(err => {
       console.error(`Goal ${id} execution failed:`, err);
       goal.status = "failed";
       goal.summary = `Failed: ${err.message}`;
@@ -291,6 +313,38 @@ export class FabricEngine extends EventEmitter {
     });
 
     return id;
+  }
+
+  /**
+   * Create multiple related goals from descriptions.
+   * Returns a batch ID and all created goal IDs.
+   */
+  async createBatchGoals(descriptions: string[], opts?: { model?: "sonnet" | "opus" | "haiku"; maxBudgetUsd?: number; maxTurns?: number }): Promise<{ batchId: string; goalIds: string[] }> {
+    const batchId = `batch-${Date.now()}`;
+    const goalIds: string[] = [];
+
+    this.emitEvent({
+      type: "activity",
+      data: { time: Date.now(), text: `<strong>you</strong> created batch of ${descriptions.length} goals` },
+    });
+
+    for (const desc of descriptions) {
+      const id = await this.createGoal({
+        description: desc,
+        model: opts?.model,
+        maxBudgetUsd: opts?.maxBudgetUsd,
+        maxTurns: opts?.maxTurns,
+        batchId,
+      });
+      goalIds.push(id);
+    }
+
+    this.emitEvent({
+      type: "toast",
+      data: { title: "Batch created", body: `${descriptions.length} goals launched`, color: "var(--accent)" },
+    });
+
+    return { batchId, goalIds };
   }
 
   /**
@@ -336,9 +390,12 @@ export class FabricEngine extends EventEmitter {
    * - Error scrubbing: transient errors are NOT shown to the LLM on retry
    * - Retry counter resets on any successful assistant response
    */
-  private async executeGoal(goalId: string, description: string): Promise<void> {
+  private async executeGoal(goalId: string, description: string, overrides?: { model?: "sonnet" | "opus" | "haiku"; maxBudgetUsd?: number; maxTurns?: number }): Promise<void> {
     const goal = this.goals.get(goalId);
     if (!goal) return;
+    const goalModel = overrides?.model || goal.model || this.defaultModel;
+    const goalBudget = overrides?.maxBudgetUsd ?? this.defaultBudget;
+    const goalMaxTurns = overrides?.maxTurns ?? this.defaultMaxTurns;
 
     const abortController = new AbortController();
     this.abortControllers.set(goalId, abortController);
@@ -366,19 +423,19 @@ export class FabricEngine extends EventEmitter {
           description: "Research agent for gathering information and analyzing code",
           prompt: "You are a research agent. Analyze code, search for information, and report findings. Be thorough but concise.",
           tools: ["Read", "Grep", "Glob", "WebSearch"],
-          model: this.defaultModel,
+          model: goalModel,
         },
         "implementer": {
           description: "Implementation agent for writing and modifying code",
           prompt: "You are an implementation agent. Write clean, well-structured code. Follow existing patterns in the codebase.",
           tools: ["Read", "Edit", "Write", "Bash", "Grep", "Glob"],
-          model: this.defaultModel,
+          model: goalModel,
         },
         "reviewer": {
           description: "Code review agent for checking quality and correctness",
           prompt: "You are a code review agent. Check for bugs, security issues, and style problems. Be specific in your feedback.",
           tools: ["Read", "Grep", "Glob"],
-          model: this.defaultModel,
+          model: goalModel,
         },
       },
       tools: ["Read", "Grep", "Glob", "Bash", "Edit", "Write", "Agent",
@@ -391,8 +448,8 @@ export class FabricEngine extends EventEmitter {
         "Agent",
       ],
       permissionMode: "default",
-      maxTurns: this.defaultMaxTurns,
-      maxBudgetUsd: this.defaultBudget,
+      maxTurns: goalMaxTurns,
+      maxBudgetUsd: goalBudget,
       effort: "medium",
       persistSession: true,
       hooks: {
@@ -566,10 +623,11 @@ Work in the current directory. Be efficient and focused.${extPromptSnippets ? `\
         if (usage) {
           goal.inputTokens += usage.input_tokens || 0;
           goal.outputTokens += usage.output_tokens || 0;
-          const pricing = MODEL_PRICING[this.defaultModel] || MODEL_PRICING.sonnet;
+          const effectiveModel = goal.model || this.defaultModel;
+          const pricing = MODEL_PRICING[effectiveModel] || MODEL_PRICING.sonnet;
           goal.costUsd = (goal.inputTokens / 1_000_000) * pricing.input
                        + (goal.outputTokens / 1_000_000) * pricing.output;
-          this.emitEvent({ type: "cost-update", goalId, data: { costUsd: goal.costUsd, inputTokens: goal.inputTokens, outputTokens: goal.outputTokens, model: this.defaultModel } });
+          this.emitEvent({ type: "cost-update", goalId, data: { costUsd: goal.costUsd, inputTokens: goal.inputTokens, outputTokens: goal.outputTokens, model: effectiveModel } });
         }
         // Store session ID
         if (assistantMsg.session_id) {

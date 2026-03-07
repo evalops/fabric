@@ -1,6 +1,7 @@
-import type { Goal, Agent, Attention, ActivityEvent, FabricSettings, FabricBridge } from './types';
+import type { Goal, Agent, Attention, ActivityEvent, FabricSettings, FabricBridge, GoalTemplate } from './types';
 
 const SETTINGS_KEY = "fabric:settings:v1";
+const TEMPLATES_KEY = "fabric:templates:v1";
 
 export const DEFAULT_SETTINGS: FabricSettings = {
   apiKey: "",
@@ -23,17 +24,30 @@ function loadSettings(): FabricSettings {
 
 export const bridge = (window as any).fabric as FabricBridge | undefined;
 
+function loadTemplates(): GoalTemplate[] {
+  try {
+    const raw = localStorage.getItem(TEMPLATES_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return [];
+}
+
 export const state = {
   goals: [] as Goal[],
   agents: [] as Agent[],
   attentionItems: [] as Attention[],
   activityLog: [] as ActivityEvent[],
+  templates: loadTemplates(),
   settings: loadSettings(),
   darkMode: false,
   currentView: "needs-you",
   simIdx: 0,
   cmdkSelectedIdx: 0,
 };
+
+export function saveTemplates(): void {
+  localStorage.setItem(TEMPLATES_KEY, JSON.stringify(state.templates));
+}
 
 // Cross-module callbacks set during init to avoid circular imports
 export const callbacks = {
