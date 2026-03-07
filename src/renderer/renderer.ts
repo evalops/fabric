@@ -38,6 +38,26 @@ interface Goal {
   outputTokens: number;
   startedAt: number;
   completedAt?: number;
+  // Interconnection: dependencies
+  blockedBy: string[];
+  enables: string[];
+  // Interconnection: shared context
+  insights: Insight[];
+  // Interconnection: impact tracking
+  areasAffected: string[];
+}
+
+interface Insight {
+  id: string;
+  fromGoalId: string;
+  text: string;
+  time: number;
+  relevance: "high" | "medium" | "low";
+}
+
+interface AgentAffinity {
+  agentName: string;
+  count: number;
 }
 
 interface Agent {
@@ -51,6 +71,10 @@ interface Agent {
   avgLatency: string;
   costToday: string;
   history: { time: number; text: string }[];
+  // Interconnection: reputation (populated at runtime)
+  goalHistory: { goalId: string; goalTitle: string; role: string; time: number }[];
+  frequentPartners: AgentAffinity[];
+  successRate: number;
 }
 
 interface Attention {
@@ -97,7 +121,7 @@ function formatDuration(startedAt: number, completedAt?: number): string {
 const NOW = Date.now();
 const MIN = 60_000;
 
-const agents: Agent[] = [
+const _rawAgents: any[] = [
   {
     id: "a-build-validator", name: "build-validator",
     capabilities: ["build-validation", "artifact-signing"],
@@ -238,7 +262,15 @@ const agents: Agent[] = [
   },
 ];
 
-const goals: Goal[] = [
+// Add interconnection fields to agents
+const agents: Agent[] = _rawAgents.map((a: any) => ({
+  ...a,
+  goalHistory: [],
+  frequentPartners: [],
+  successRate: 0.92 + Math.random() * 0.08,
+}));
+
+const _rawGoals: any[] = [
   {
     id: "g1",
     title: "Deploy v2.3 to production",
@@ -340,6 +372,80 @@ const goals: Goal[] = [
     ],
   },
 ];
+
+// Add interconnection fields to goals
+const _goalInterconnections: Record<string, Partial<Goal>> = {
+  g1: {
+    blockedBy: ["g5"],  // Deploy depends on security audit being done
+    enables: [],
+    insights: [],
+    areasAffected: ["deployment", "us-east-1", "api-gateway"],
+  },
+  g2: {
+    blockedBy: [],
+    enables: [],
+    insights: [
+      { id: "ins-1", fromGoalId: "g3", text: "Auth refactor may affect billing validation — OAuth tokens used in payment verification", time: NOW - 8 * MIN, relevance: "medium" },
+    ],
+    areasAffected: ["billing", "transactions", "reporting"],
+  },
+  g3: {
+    blockedBy: [],
+    enables: ["g1"],  // OAuth fix enables safer deployments
+    insights: [
+      { id: "ins-2", fromGoalId: "g5", text: "Security audit found 3 issues related to OAuth 2.0 — these align with your migration plan", time: NOW - 30 * MIN, relevance: "high" },
+    ],
+    areasAffected: ["auth", "oauth", "client-libraries", "security"],
+  },
+  g4: {
+    blockedBy: [],
+    enables: ["g1"],  // Latency fix enables deploy confidence
+    insights: [
+      { id: "ins-3", fromGoalId: "g2", text: "Billing investigation found /api/billing endpoint has 340ms P95 — may be related to your latency target", time: NOW - 6 * MIN, relevance: "high" },
+    ],
+    areasAffected: ["api-endpoints", "database", "caching", "performance"],
+  },
+  g5: {
+    blockedBy: [],
+    enables: ["g3"],  // Security audit enables auth refactor
+    insights: [],
+    areasAffected: ["dependencies", "security", "packages"],
+  },
+};
+
+const goals: Goal[] = _rawGoals.map((g: any) => ({
+  ...g,
+  blockedBy: _goalInterconnections[g.id]?.blockedBy || [],
+  enables: _goalInterconnections[g.id]?.enables || [],
+  insights: _goalInterconnections[g.id]?.insights || [],
+  areasAffected: _goalInterconnections[g.id]?.areasAffected || [],
+}));
+
+// Build agent reputation from goal data
+function buildAgentReputation(): void {
+  goals.forEach(g => {
+    const agentNames = [...new Set(g.steps.filter((s: Step) => s.agent).map((s: Step) => s.agent!))];
+    agentNames.forEach(name => {
+      const agent = agents.find(a => a.name === name);
+      if (agent && !agent.goalHistory.find(h => h.goalId === g.id)) {
+        agent.goalHistory.push({ goalId: g.id, goalTitle: g.title, role: agent.capabilities[0] || "general", time: g.startedAt });
+      }
+    });
+  });
+  agents.forEach(a => {
+    const partnerCounts: Record<string, number> = {};
+    a.goalHistory.forEach(h => {
+      const goal = goals.find(g => g.id === h.goalId);
+      if (!goal) return;
+      const coworkers = [...new Set(goal.steps.filter((s: Step) => s.agent && s.agent !== a.name).map((s: Step) => s.agent!))];
+      coworkers.forEach(name => { partnerCounts[name] = (partnerCounts[name] || 0) + 1; });
+    });
+    a.frequentPartners = Object.entries(partnerCounts)
+      .sort(([, x], [, y]) => y - x)
+      .slice(0, 3)
+      .map(([agentName, count]) => ({ agentName, count }));
+  });
+}
 
 const attentionItems: Attention[] = [
   {
@@ -908,6 +1014,7 @@ async function createGoalFromNL(description: string): Promise<void> {
       steps: [],
       timeline: [{ time: Date.now(), text: `Goal created by <strong>you</strong>` }],
       costUsd: 0, inputTokens: 0, outputTokens: 0, startedAt: Date.now(),
+      blockedBy: [], enables: [], insights: [], areasAffected: [],
     };
     goals.unshift(placeholder);
     activityLog.unshift({ time: Date.now(), text: `<strong>you</strong> created goal: "${title}"` });
@@ -935,6 +1042,7 @@ async function createGoalFromNL(description: string): Promise<void> {
         { time: Date.now(), text: "<strong>architect</strong> began analyzing requirements" },
       ],
       costUsd: 0, inputTokens: 0, outputTokens: 0, startedAt: Date.now(),
+      blockedBy: [], enables: [], insights: [], areasAffected: [],
     };
 
     goals.unshift(newGoal);
@@ -1015,16 +1123,55 @@ function openAgentDetail(agentId: string): void {
       </div>
     </div>
 
+    <div class="detail-meta" style="margin-top: 0;">
+      <div class="detail-meta-item">
+        <span class="detail-meta-label">Success rate</span>
+        <span class="detail-meta-value">${Math.round(agent.successRate * 100)}%</span>
+      </div>
+      <div class="detail-meta-item">
+        <span class="detail-meta-label">Goals worked</span>
+        <span class="detail-meta-value">${agent.goalHistory.length}</span>
+      </div>
+    </div>
+
     <div class="detail-section-title">Capabilities</div>
     <div class="agent-caps">
       ${agent.capabilities.map(c => `<span class="agent-cap-tag">${c}</span>`).join("")}
     </div>
+
+    ${agent.frequentPartners.length > 0 ? `
+      <div class="detail-section-title">Frequently works with</div>
+      <div class="agent-roster" style="margin-bottom: 16px;">
+        ${agent.frequentPartners.map(p => {
+          const partner = agents.find(a => a.name === p.agentName);
+          return `<div class="agent-roster-item" data-agent="${partner?.id || ""}" title="${p.count} shared goal${p.count > 1 ? "s" : ""}">
+            <div class="agent-avatar-sm" style="background: ${stringToColor(p.agentName)}">${p.agentName.charAt(0).toUpperCase()}</div>
+            <span>${p.agentName}</span>
+            <span style="font-size: 11px; color: var(--text-muted);">\u00d7${p.count}</span>
+          </div>`;
+        }).join("")}
+      </div>
+    ` : ""}
 
     ${agent.currentGoal ? `
       <div class="detail-section-title">Currently working on</div>
       <div class="agent-current-goal" data-goal="${goals.find(g => g.title === agent.currentGoal)?.id || ""}">
         <span>${agent.currentGoal}</span>
         <span class="cmdk-item-hint">\u2192</span>
+      </div>
+    ` : ""}
+
+    ${agent.goalHistory.length > 0 ? `
+      <div class="detail-section-title">Goal history</div>
+      <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px;">
+        ${agent.goalHistory.map(h => {
+          const hGoal = goals.find(g => g.id === h.goalId);
+          return `<div class="interconnect-link" data-goal="${h.goalId}" style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer; border-radius: var(--radius-xs);">
+            ${hGoal ? `<span class="goal-indicator ind-${hGoal.status}" style="margin: 0;"></span>` : ""}
+            <span style="font-weight: 500;">${h.goalTitle}</span>
+            <span style="color: var(--text-muted); margin-left: auto;">${h.role} \u00b7 ${relativeTime(h.time)}</span>
+          </div>`;
+        }).join("")}
       </div>
     ` : ""}
 
@@ -1048,6 +1195,21 @@ function openAgentDetail(agentId: string): void {
       if (goalId) { closeDetail(); setTimeout(() => openGoalDetail(goalId), 200); }
     });
   }
+
+  // Partner agent clicks + goal history clicks
+  panel.querySelectorAll(".agent-roster-item").forEach(el => {
+    el.addEventListener("click", () => {
+      const aid = (el as HTMLElement).dataset.agent;
+      if (aid) { closeDetail(); setTimeout(() => openAgentDetail(aid), 200); }
+    });
+  });
+  panel.querySelectorAll(".interconnect-link").forEach(el => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const gid = (el as HTMLElement).dataset.goal;
+      if (gid) { closeDetail(); setTimeout(() => openGoalDetail(gid), 200); }
+    });
+  });
 }
 
 function stringToColor(str: string): string {
@@ -1133,13 +1295,93 @@ function openGoalDetail(goalId: string): void {
       </div>
     `).join("")}
 
-    <div class="detail-section-title" style="margin-top: 24px;">Timeline</div>
-    ${goal.timeline.slice().reverse().map(ev => `
-      <div class="detail-timeline-item">
-        <span class="detail-timeline-time">${relativeTime(ev.time)}</span>
-        <span>${ev.text}</span>
+    ${/* Dependencies */""}
+    ${goal.blockedBy.length > 0 || goal.enables.length > 0 ? `
+      <div class="detail-section-title">Dependencies</div>
+      <div style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px;">
+        ${goal.blockedBy.map(id => {
+          const dep = goals.find(g => g.id === id);
+          return dep ? `<div class="interconnect-link" data-goal="${id}" style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-surface); border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; border: 1px solid var(--border);">
+            <span style="color: var(--amber); font-size: 11px; font-weight: 600;">BLOCKED BY</span>
+            <span class="goal-indicator ind-${dep.status}" style="margin: 0;"></span>
+            <span style="font-weight: 500;">${dep.title}</span>
+            <span style="margin-left: auto; color: var(--text-muted); font-size: 12px;">${Math.round(dep.progress)}%</span>
+          </div>` : "";
+        }).join("")}
+        ${goal.enables.map(id => {
+          const dep = goals.find(g => g.id === id);
+          return dep ? `<div class="interconnect-link" data-goal="${id}" style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-surface); border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; border: 1px solid var(--border);">
+            <span style="color: var(--green); font-size: 11px; font-weight: 600;">ENABLES</span>
+            <span class="goal-indicator ind-${dep.status}" style="margin: 0;"></span>
+            <span style="font-weight: 500;">${dep.title}</span>
+            <span style="margin-left: auto; color: var(--text-muted); font-size: 12px;">${Math.round(dep.progress)}%</span>
+          </div>` : "";
+        }).join("")}
       </div>
-    `).join("")}
+    ` : ""}
+
+    ${/* Shared Context / Insights */""}
+    ${goal.insights.length > 0 ? `
+      <div class="detail-section-title">Insights from other goals</div>
+      <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px;">
+        ${goal.insights.map(ins => {
+          const fromGoal = goals.find(g => g.id === ins.fromGoalId);
+          return `<div class="insight-card" style="padding: 10px 14px; background: ${ins.relevance === "high" ? "var(--blue-soft)" : "var(--bg-surface)"}; border: 1px solid ${ins.relevance === "high" ? "var(--blue)" : "var(--border)"}; border-radius: var(--radius-sm);">
+            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px;">
+              <span style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; color: ${ins.relevance === "high" ? "var(--blue)" : "var(--text-muted)"};">${ins.relevance} relevance</span>
+              <span style="font-size: 11px; color: var(--text-muted);">\u00b7 ${relativeTime(ins.time)}</span>
+              ${fromGoal ? `<span class="interconnect-link" data-goal="${fromGoal.id}" style="font-size: 11px; color: var(--accent); cursor: pointer; margin-left: auto;">from: ${fromGoal.title}</span>` : ""}
+            </div>
+            <div style="font-size: 13px; color: var(--text-secondary); line-height: 1.5;">${ins.text}</div>
+          </div>`;
+        }).join("")}
+      </div>
+    ` : ""}
+
+    ${/* Impact Areas */""}
+    ${goal.areasAffected.length > 0 ? (() => {
+      const relatedGoals = goals.filter(g => g.id !== goal.id && g.areasAffected.some(a => goal.areasAffected.includes(a)));
+      return `
+        <div class="detail-section-title">Impact areas</div>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: ${relatedGoals.length > 0 ? "8px" : "16px"};">
+          ${goal.areasAffected.map(a => `<span class="agent-cap-tag">${a}</span>`).join("")}
+        </div>
+        ${relatedGoals.length > 0 ? `
+          <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px;">
+            ${relatedGoals.map(rg => {
+              const shared = rg.areasAffected.filter(a => goal.areasAffected.includes(a));
+              return `<div class="interconnect-link" data-goal="${rg.id}" style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 12px; color: var(--text-secondary); cursor: pointer; border-radius: var(--radius-xs); transition: background 0.12s;">
+                <span class="goal-indicator ind-${rg.status}" style="margin: 0;"></span>
+                <span style="font-weight: 500; color: var(--text-primary);">${rg.title}</span>
+                <span style="color: var(--text-muted);">shares: ${shared.join(", ")}</span>
+              </div>`;
+            }).join("")}
+          </div>
+        ` : ""}
+      `;
+    })() : ""}
+
+    <div class="detail-section-title" style="margin-top: 8px;">Timeline</div>
+    ${(() => {
+      // Cross-goal activity: merge in related activity from other goals
+      const relatedGoalIds = [...goal.blockedBy, ...goal.enables, ...goal.insights.map(i => i.fromGoalId)];
+      const relatedGoals = goals.filter(g => relatedGoalIds.includes(g.id));
+      const crossActivity = relatedGoals.flatMap(rg =>
+        rg.timeline.filter(ev => ev.time >= goal.startedAt).map(ev => ({
+          ...ev,
+          text: `<span style="opacity: 0.6; font-size: 12px;">[${rg.title}]</span> ${ev.text}`,
+          cross: true,
+        }))
+      );
+      const merged = [...goal.timeline.map(ev => ({ ...ev, cross: false })), ...crossActivity]
+        .sort((a, b) => b.time - a.time);
+      return merged.map(ev => `
+        <div class="detail-timeline-item" style="${ev.cross ? "opacity: 0.55; border-left: 2px solid var(--border); padding-left: 10px; margin-left: -2px;" : ""}">
+          <span class="detail-timeline-time">${relativeTime(ev.time)}</span>
+          <span>${ev.text}</span>
+        </div>
+      `).join("");
+    })()}
   `;
 
   overlay.classList.add("open");
@@ -1153,6 +1395,15 @@ function openGoalDetail(goalId: string): void {
       const agentId = (el as HTMLElement).dataset.agent || "";
       const aid = agentId || agents.find(a => a.name === agentName)?.id;
       if (aid) { closeDetail(); setTimeout(() => openAgentDetail(aid), 200); }
+    });
+  });
+
+  // Interconnect goal links
+  panel.querySelectorAll(".interconnect-link").forEach(el => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const gid = (el as HTMLElement).dataset.goal;
+      if (gid) { closeDetail(); setTimeout(() => openGoalDetail(gid), 200); }
     });
   });
 }
@@ -1222,6 +1473,30 @@ function renderGraph(): void {
     });
   });
 
+  // Add dependency edges between goals
+  interface GDepEdge { from: string; to: string; depType: "blocks" | "enables" | "shares-area"; }
+  const depEdges: GDepEdge[] = [];
+  activeGoals.forEach(goal => {
+    goal.blockedBy.forEach(depId => {
+      if (nodes.find(n => n.id === depId)) {
+        depEdges.push({ from: depId, to: goal.id, depType: "blocks" });
+      }
+    });
+    goal.enables.forEach(enId => {
+      if (nodes.find(n => n.id === enId)) {
+        depEdges.push({ from: goal.id, to: enId, depType: "enables" });
+      }
+    });
+    // Shared area connections
+    activeGoals.forEach(other => {
+      if (other.id <= goal.id) return; // avoid duplicates
+      const shared = other.areasAffected.filter(a => goal.areasAffected.includes(a));
+      if (shared.length > 0) {
+        depEdges.push({ from: goal.id, to: other.id, depType: "shares-area" });
+      }
+    });
+  });
+
   // Reposition agent nodes to center vertically
   const agentNodes = nodes.filter(n => n.col === 1);
   const totalAgentHeight = agentNodes.length * (nodeH + gapY) - gapY;
@@ -1242,6 +1517,7 @@ function renderGraph(): void {
         </marker>
       </defs>
 
+      ${/* Goal-to-agent edges */""}
       ${edges.map(e => {
         const from = nodeMap.get(e.from)!;
         const to = nodeMap.get(e.to)!;
@@ -1254,6 +1530,23 @@ function renderGraph(): void {
         return `<path d="M${x1},${y1} C${cx1},${y1} ${cx2},${y2} ${x2},${y2}"
           fill="none" stroke="var(--border-lit)" stroke-width="1.5" marker-end="url(#arrowhead)"
           class="graph-edge" />`;
+      }).join("")}
+
+      ${/* Goal-to-goal dependency edges */""}
+      ${depEdges.map(e => {
+        const from = nodeMap.get(e.from);
+        const to = nodeMap.get(e.to);
+        if (!from || !to) return "";
+        const x1 = from.x + nodeW / 2;
+        const y1 = e.depType === "shares-area" ? from.y + nodeH : from.y + nodeH;
+        const x2 = to.x + nodeW / 2;
+        const y2 = to.y;
+        const color = e.depType === "blocks" ? "var(--amber)" : e.depType === "enables" ? "var(--green)" : "var(--border-lit)";
+        const dash = e.depType === "shares-area" ? "4,4" : "none";
+        const midY = (y1 + y2) / 2;
+        return `<path d="M${x1},${y1} C${x1},${midY} ${x2},${midY} ${x2},${y2}"
+          fill="none" stroke="${color}" stroke-width="1.5" stroke-dasharray="${dash}"
+          opacity="0.7" marker-end="url(#arrowhead)" />`;
       }).join("")}
 
       ${nodes.map(n => `
@@ -1354,85 +1647,298 @@ function renderCosts(): void {
   const totalTokens = tokens.input + tokens.output;
   const activeGoals = goals.filter(g => g.status === "active");
   const completedGoals = goals.filter(g => g.status === "complete");
-
-  // Sort goals by cost descending
   const sortedGoals = [...goals].sort((a, b) => b.costUsd - a.costUsd);
-  const maxCost = sortedGoals[0]?.costUsd || 1;
+  const maxGoalCost = sortedGoals[0]?.costUsd || 1;
+
+  // Efficiency metrics
+  const completedSteps = goals.reduce((sum, g) => sum + g.steps.filter(s => s.state === "done").length, 0);
+  const totalSteps = goals.reduce((sum, g) => sum + g.steps.length, 0);
+  const costPerStep = completedSteps > 0 ? totalCost / completedSteps : 0;
+  const costPerGoalCompleted = completedGoals.length > 0 ? completedGoals.reduce((s, g) => s + g.costUsd, 0) / completedGoals.length : 0;
+  const avgDuration = completedGoals.length > 0 ? completedGoals.reduce((s, g) => s + ((g.completedAt || Date.now()) - g.startedAt), 0) / completedGoals.length : 0;
+
+  // Agent cost breakdown
+  const agentCosts: Record<string, { cost: number; tokens: number; goals: number }> = {};
+  goals.forEach(g => {
+    const agentNames = [...new Set(g.steps.filter(s => s.agent).map(s => s.agent!))];
+    const perAgentCost = agentNames.length > 0 ? g.costUsd / agentNames.length : 0;
+    const perAgentTokens = agentNames.length > 0 ? (g.inputTokens + g.outputTokens) / agentNames.length : 0;
+    agentNames.forEach(name => {
+      if (!agentCosts[name]) agentCosts[name] = { cost: 0, tokens: 0, goals: 0 };
+      agentCosts[name].cost += perAgentCost;
+      agentCosts[name].tokens += perAgentTokens;
+      agentCosts[name].goals += 1;
+    });
+  });
+  const sortedAgentCosts = Object.entries(agentCosts).sort(([, a], [, b]) => b.cost - a.cost);
+  const maxAgentCost = sortedAgentCosts[0]?.[1].cost || 1;
+
+  // Area cost breakdown
+  const areaCosts: Record<string, { cost: number; goalCount: number }> = {};
+  goals.forEach(g => {
+    const perArea = g.areasAffected.length > 0 ? g.costUsd / g.areasAffected.length : 0;
+    g.areasAffected.forEach(area => {
+      if (!areaCosts[area]) areaCosts[area] = { cost: 0, goalCount: 0 };
+      areaCosts[area].cost += perArea;
+      areaCosts[area].goalCount += 1;
+    });
+  });
+  const sortedAreaCosts = Object.entries(areaCosts).sort(([, a], [, b]) => b.cost - a.cost);
+
+  // Spend timeline — build hourly spend bars from goal start times
+  const now = Date.now();
+  const hours = 6;
+  const hourlySpend: number[] = new Array(hours).fill(0);
+  goals.forEach(g => {
+    const hourIdx = Math.min(hours - 1, Math.floor((now - g.startedAt) / 3_600_000));
+    if (hourIdx >= 0 && hourIdx < hours) hourlySpend[hours - 1 - hourIdx] += g.costUsd;
+  });
+  const maxHourly = Math.max(...hourlySpend, 0.01);
+
+  // Run rate projection
+  const hoursActive = goals.length > 0 ? Math.max(1, (now - Math.min(...goals.map(g => g.startedAt))) / 3_600_000) : 1;
+  const hourlyRate = totalCost / hoursActive;
+  const dailyProjection = hourlyRate * 24;
+  const monthlyProjection = hourlyRate * 24 * 30;
+
+  // Budget utilization per goal
+  const budgetLimit = settings.maxBudgetUsd;
 
   feed.innerHTML = `
-    <div class="settings-view">
-      <!-- Summary cards -->
-      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px;">
-        <div class="settings-card" style="margin-bottom: 0;">
-          <div style="font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">$${totalCost.toFixed(2)}</div>
-          <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">Total spend</div>
+    <div class="settings-view" style="max-width: 720px;">
+
+      <!-- Hero metrics row -->
+      <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;">
+        <div class="settings-card" style="margin-bottom: 0; padding: 16px 18px;">
+          <div style="font-size: 28px; font-weight: 700; letter-spacing: -1px;">$${totalCost.toFixed(2)}</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">Total spend</div>
         </div>
-        <div class="settings-card" style="margin-bottom: 0;">
-          <div style="font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">${formatTokens(totalTokens)}</div>
-          <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">Total tokens</div>
+        <div class="settings-card" style="margin-bottom: 0; padding: 16px 18px;">
+          <div style="font-size: 28px; font-weight: 700; letter-spacing: -1px;">${formatTokens(totalTokens)}</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">Tokens used</div>
         </div>
-        <div class="settings-card" style="margin-bottom: 0;">
-          <div style="font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">${goals.length > 0 ? "$" + (totalCost / goals.length).toFixed(2) : "$0.00"}</div>
-          <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">Avg per goal</div>
+        <div class="settings-card" style="margin-bottom: 0; padding: 16px 18px;">
+          <div style="font-size: 28px; font-weight: 700; letter-spacing: -1px; color: ${hourlyRate > 5 ? "var(--amber)" : "var(--text-primary)"};">$${hourlyRate.toFixed(2)}</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">Per hour</div>
+        </div>
+        <div class="settings-card" style="margin-bottom: 0; padding: 16px 18px;">
+          <div style="font-size: 28px; font-weight: 700; letter-spacing: -1px;">${goals.length}</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">Goals</div>
+        </div>
+      </div>
+
+      <!-- Spend over time (bar chart) -->
+      <div class="settings-card">
+        <div class="settings-card-header">
+          <div class="settings-card-title">Spend over time</div>
+          <div class="settings-card-desc">Last ${hours} hours</div>
+        </div>
+        <div style="display: flex; align-items: flex-end; gap: 4px; height: 80px; padding-top: 8px;">
+          ${hourlySpend.map((val, i) => `
+            <div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%;">
+              <div style="flex: 1; width: 100%; display: flex; align-items: flex-end;">
+                <div style="width: 100%; height: ${Math.max(2, (val / maxHourly) * 100)}%; background: var(--accent); border-radius: 3px 3px 0 0; transition: height 0.3s; min-height: 2px;"></div>
+              </div>
+              <div style="font-size: 10px; color: var(--text-muted); font-family: var(--font-mono);">${i === hours - 1 ? "now" : `-${hours - 1 - i}h`}</div>
+            </div>
+          `).join("")}
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--bg-surface);">
+          <span>Peak: $${maxHourly.toFixed(2)}/hr</span>
+          <span>Avg: $${(totalCost / hours).toFixed(2)}/hr</span>
+        </div>
+      </div>
+
+      <!-- Projections -->
+      <div class="settings-card">
+        <div class="settings-card-header">
+          <div class="settings-card-title">Projections</div>
+          <div class="settings-card-desc">At current run rate of $${hourlyRate.toFixed(2)}/hr</div>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">
+          <div>
+            <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 4px;">Today</div>
+            <div style="font-size: 20px; font-weight: 700;">$${dailyProjection.toFixed(0)}</div>
+          </div>
+          <div>
+            <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 4px;">This week</div>
+            <div style="font-size: 20px; font-weight: 700;">$${(dailyProjection * 7).toFixed(0)}</div>
+          </div>
+          <div>
+            <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 4px;">This month</div>
+            <div style="font-size: 20px; font-weight: 700; color: ${monthlyProjection > 500 ? "var(--amber)" : "var(--text-primary)"};">$${monthlyProjection.toFixed(0)}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Efficiency metrics -->
+      <div class="settings-card">
+        <div class="settings-card-header">
+          <div class="settings-card-title">Efficiency</div>
+          <div class="settings-card-desc">${completedSteps}/${totalSteps} steps completed across ${goals.length} goals</div>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+          <div style="padding: 12px; background: var(--bg-surface); border-radius: var(--radius-sm);">
+            <div style="font-size: 18px; font-weight: 700;">$${costPerStep.toFixed(2)}</div>
+            <div style="font-size: 12px; color: var(--text-muted);">Cost per step</div>
+          </div>
+          <div style="padding: 12px; background: var(--bg-surface); border-radius: var(--radius-sm);">
+            <div style="font-size: 18px; font-weight: 700;">$${costPerGoalCompleted.toFixed(2)}</div>
+            <div style="font-size: 12px; color: var(--text-muted);">Cost per completed goal</div>
+          </div>
+          <div style="padding: 12px; background: var(--bg-surface); border-radius: var(--radius-sm);">
+            <div style="font-size: 18px; font-weight: 700;">${totalTokens > 0 ? "$" + (totalCost / (totalTokens / 1000)).toFixed(4) : "—"}</div>
+            <div style="font-size: 12px; color: var(--text-muted);">Cost per 1K tokens</div>
+          </div>
+          <div style="padding: 12px; background: var(--bg-surface); border-radius: var(--radius-sm);">
+            <div style="font-size: 18px; font-weight: 700;">${avgDuration > 0 ? formatDuration(0, avgDuration) : "—"}</div>
+            <div style="font-size: 12px; color: var(--text-muted);">Avg goal duration</div>
+          </div>
         </div>
       </div>
 
       <!-- Token breakdown -->
       <div class="settings-card">
         <div class="settings-card-header">
-          <div class="settings-card-title">Token usage</div>
-          <div class="settings-card-desc">${formatTokens(tokens.input)} input, ${formatTokens(tokens.output)} output</div>
+          <div class="settings-card-title">Token breakdown</div>
+          <div class="settings-card-desc">${formatTokens(tokens.input)} input \u00b7 ${formatTokens(tokens.output)} output \u00b7 ${totalTokens > 0 ? Math.round((tokens.output / totalTokens) * 100) : 0}% output-heavy</div>
         </div>
-        <div style="display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--bg-surface);">
+        <div style="display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--bg-surface);">
           <div style="width: ${totalTokens > 0 ? (tokens.input / totalTokens) * 100 : 50}%; background: var(--blue); transition: width 0.3s;"></div>
           <div style="width: ${totalTokens > 0 ? (tokens.output / totalTokens) * 100 : 50}%; background: var(--accent); transition: width 0.3s;"></div>
         </div>
-        <div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 12px; color: var(--text-muted);">
-          <span><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--blue); margin-right: 4px;"></span>Input (~$${((tokens.input / 1_000_000) * 3).toFixed(2)})</span>
-          <span><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 4px;"></span>Output (~$${((tokens.output / 1_000_000) * 15).toFixed(2)})</span>
+        <div style="display: flex; justify-content: space-between; margin-top: 10px; font-size: 12px;">
+          <div>
+            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--blue); margin-right: 4px;"></span>
+            <span style="color: var(--text-secondary);">Input</span>
+            <span style="color: var(--text-muted); margin-left: 4px;">${formatTokens(tokens.input)}</span>
+            <span style="color: var(--text-muted); font-family: var(--font-mono);"> (~$${((tokens.input / 1_000_000) * 3).toFixed(2)})</span>
+          </div>
+          <div>
+            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 4px;"></span>
+            <span style="color: var(--text-secondary);">Output</span>
+            <span style="color: var(--text-muted); margin-left: 4px;">${formatTokens(tokens.output)}</span>
+            <span style="color: var(--text-muted); font-family: var(--font-mono);"> (~$${((tokens.output / 1_000_000) * 15).toFixed(2)})</span>
+          </div>
         </div>
       </div>
 
-      <!-- Per-goal breakdown -->
+      <!-- Cost by agent -->
       <div class="settings-card">
         <div class="settings-card-header">
-          <div class="settings-card-title">Cost by goal</div>
-          <div class="settings-card-desc">${activeGoals.length} active, ${completedGoals.length} completed</div>
+          <div class="settings-card-title">Cost by agent</div>
+          <div class="settings-card-desc">${sortedAgentCosts.length} agents with spend</div>
         </div>
-        ${sortedGoals.map(g => `
-          <div class="cost-goal-row" data-goal="${g.id}" style="padding: 10px 0; border-top: 1px solid var(--bg-surface); cursor: pointer;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-              <div style="display: flex; align-items: center; gap: 8px;">
-                <div class="goal-indicator ind-${g.status}" style="margin-top: 0;"></div>
-                <span style="font-size: 13px; font-weight: 500;">${g.title}</span>
-              </div>
-              <span style="font-family: var(--font-mono); font-size: 13px; font-weight: 600;">$${g.costUsd.toFixed(2)}</span>
+        ${sortedAgentCosts.slice(0, 8).map(([name, data]) => `
+          <div style="padding: 8px 0; border-top: 1px solid var(--bg-surface);">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+              <div class="agent-avatar-sm" style="background: ${stringToColor(name)}; width: 22px; height: 22px; font-size: 10px;">${name.charAt(0).toUpperCase()}</div>
+              <span style="font-size: 13px; font-weight: 500; flex: 1;">${name}</span>
+              <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary);">${data.goals} goal${data.goals > 1 ? "s" : ""}</span>
+              <span style="font-family: var(--font-mono); font-size: 13px; font-weight: 600; width: 60px; text-align: right;">$${data.cost.toFixed(2)}</span>
             </div>
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <div style="flex: 1; height: 4px; background: var(--bg-surface); border-radius: 2px; overflow: hidden;">
-                <div style="width: ${(g.costUsd / maxCost) * 100}%; height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.3s;"></div>
-              </div>
-              <span style="font-size: 11px; color: var(--text-muted); flex-shrink: 0; width: 50px; text-align: right;">${formatTokens(g.inputTokens + g.outputTokens)} tok</span>
+            <div style="height: 3px; background: var(--bg-surface); border-radius: 2px; overflow: hidden; margin-left: 30px;">
+              <div style="width: ${(data.cost / maxAgentCost) * 100}%; height: 100%; background: ${stringToColor(name)}; border-radius: 2px; opacity: 0.7;"></div>
             </div>
           </div>
         `).join("")}
       </div>
 
-      <!-- Budget -->
+      <!-- Cost by area -->
+      <div class="settings-card">
+        <div class="settings-card-header">
+          <div class="settings-card-title">Cost by area</div>
+          <div class="settings-card-desc">Where the money goes</div>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+          ${sortedAreaCosts.map(([area, data]) => {
+            const pct = totalCost > 0 ? (data.cost / totalCost) * 100 : 0;
+            return `<div style="padding: 8px 14px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-sm); display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 90px;">
+              <span style="font-size: 12px; font-weight: 500;">${area}</span>
+              <span style="font-family: var(--font-mono); font-size: 14px; font-weight: 700;">$${data.cost.toFixed(2)}</span>
+              <span style="font-size: 10px; color: var(--text-muted);">${pct.toFixed(0)}% \u00b7 ${data.goalCount} goal${data.goalCount > 1 ? "s" : ""}</span>
+            </div>`;
+          }).join("")}
+        </div>
+      </div>
+
+      <!-- Per-goal breakdown (expandable) -->
+      <div class="settings-card">
+        <div class="settings-card-header">
+          <div class="settings-card-title">Cost by goal</div>
+          <div class="settings-card-desc">${activeGoals.length} active \u00b7 ${completedGoals.length} completed</div>
+        </div>
+        ${sortedGoals.map(g => {
+          const budgetPct = budgetLimit > 0 ? (g.costUsd / budgetLimit) * 100 : 0;
+          const duration = formatDuration(g.startedAt, g.completedAt);
+          const goalTokens = g.inputTokens + g.outputTokens;
+          return `
+            <div class="cost-goal-row" data-goal="${g.id}" style="padding: 12px 0; border-top: 1px solid var(--bg-surface); cursor: pointer;">
+              <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                <div class="goal-indicator ind-${g.status}" style="margin-top: 0;"></div>
+                <span style="font-size: 13px; font-weight: 500; flex: 1;">${g.title}</span>
+                <span style="font-family: var(--font-mono); font-size: 15px; font-weight: 700;">$${g.costUsd.toFixed(2)}</span>
+              </div>
+              <div style="display: flex; gap: 16px; font-size: 11px; color: var(--text-muted); margin-bottom: 6px; padding-left: 16px;">
+                <span>${formatTokens(goalTokens)} tokens</span>
+                <span>${duration}</span>
+                <span>${g.steps.filter(s => s.state === "done").length}/${g.steps.length} steps</span>
+                <span>${g.agentCount} agent${g.agentCount !== 1 ? "s" : ""}</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px; padding-left: 16px;">
+                <div style="flex: 1; height: 6px; background: var(--bg-surface); border-radius: 3px; overflow: hidden; position: relative;">
+                  <div style="width: ${Math.min(100, (g.costUsd / maxGoalCost) * 100)}%; height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.3s;"></div>
+                </div>
+                <span style="font-size: 10px; color: ${budgetPct > 80 ? "var(--amber)" : "var(--text-muted)"}; font-family: var(--font-mono); flex-shrink: 0;">${budgetPct.toFixed(0)}% of limit</span>
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+
+      <!-- Budget & limits -->
       <div class="settings-card">
         <div class="settings-card-header">
           <div class="settings-card-title">Budget</div>
-          <div class="settings-card-desc">Per-goal limit: $${settings.maxBudgetUsd.toFixed(2)}</div>
+          <div class="settings-card-desc">Per-goal limit: $${budgetLimit.toFixed(2)} \u00b7 Effective total: $${(budgetLimit * goals.length).toFixed(2)}</div>
         </div>
-        <div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 8px;">
-          <span>Effective limit for ${goals.length} goals</span>
-          <span style="font-weight: 600;">$${(settings.maxBudgetUsd * goals.length).toFixed(2)}</span>
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px;">
+          <div style="padding: 12px; background: var(--bg-surface); border-radius: var(--radius-sm);">
+            <div style="font-size: 18px; font-weight: 700; color: ${totalCost > budgetLimit * goals.length * 0.8 ? "var(--amber)" : "var(--green)"};">${Math.round((totalCost / (budgetLimit * goals.length)) * 100)}%</div>
+            <div style="font-size: 12px; color: var(--text-muted);">Budget used</div>
+          </div>
+          <div style="padding: 12px; background: var(--bg-surface); border-radius: var(--radius-sm);">
+            <div style="font-size: 18px; font-weight: 700; color: var(--green);">$${Math.max(0, budgetLimit * goals.length - totalCost).toFixed(2)}</div>
+            <div style="font-size: 12px; color: var(--text-muted);">Remaining</div>
+          </div>
         </div>
-        <div style="height: 8px; background: var(--bg-surface); border-radius: 4px; overflow: hidden;">
-          <div style="width: ${Math.min(100, (totalCost / (settings.maxBudgetUsd * goals.length)) * 100)}%; height: 100%; background: ${totalCost > settings.maxBudgetUsd * goals.length * 0.8 ? "var(--amber)" : "var(--green)"}; border-radius: 4px; transition: width 0.3s;"></div>
+        <div style="height: 10px; background: var(--bg-surface); border-radius: 5px; overflow: hidden; position: relative;">
+          <div style="width: ${Math.min(100, (totalCost / (budgetLimit * goals.length)) * 100)}%; height: 100%; background: ${totalCost > budgetLimit * goals.length * 0.8 ? "var(--amber)" : "var(--green)"}; border-radius: 5px; transition: width 0.3s;"></div>
+          ${/* Budget markers for each goal */""}
+          ${goals.map((_, i) => `<div style="position: absolute; left: ${((i + 1) / goals.length) * 100}%; top: 0; bottom: 0; width: 1px; background: var(--border); opacity: 0.5;"></div>`).join("")}
         </div>
-        <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">${Math.round((totalCost / (settings.maxBudgetUsd * goals.length)) * 100)}% of total budget used</div>
+        <div style="display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: var(--text-muted);">
+          <span>$0</span>
+          <span>$${(budgetLimit * goals.length).toFixed(2)}</span>
+        </div>
+
+        ${/* Per-goal budget utilization bars */""}
+        <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--bg-surface);">
+          <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; color: var(--text-muted); margin-bottom: 8px;">Per-goal budget utilization</div>
+          ${goals.map(g => {
+            const pct = budgetLimit > 0 ? Math.min(100, (g.costUsd / budgetLimit) * 100) : 0;
+            const color = pct > 90 ? "var(--red)" : pct > 70 ? "var(--amber)" : "var(--green)";
+            return `<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+              <span style="font-size: 11px; width: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-secondary);">${g.title}</span>
+              <div style="flex: 1; height: 4px; background: var(--bg-surface); border-radius: 2px; overflow: hidden;">
+                <div style="width: ${pct}%; height: 100%; background: ${color}; border-radius: 2px;"></div>
+              </div>
+              <span style="font-size: 10px; font-family: var(--font-mono); color: ${pct > 70 ? color : "var(--text-muted)"}; width: 32px; text-align: right;">${pct.toFixed(0)}%</span>
+            </div>`;
+          }).join("")}
+        </div>
       </div>
+
     </div>
   `;
 
@@ -1555,6 +2061,9 @@ function renderAllWork(): void {
         <span class="goal-tag">${goal.agentCount} agent${goal.agentCount !== 1 ? "s" : ""}</span>
         <span class="goal-tag">${goal.steps.filter(s => s.state === "done").length}/${goal.steps.length} steps</span>
         <span class="goal-tag">$${goal.costUsd.toFixed(2)}</span>
+        ${goal.blockedBy.length > 0 ? `<span class="goal-tag" style="color: var(--amber);">${goal.blockedBy.length} dep</span>` : ""}
+        ${goal.enables.length > 0 ? `<span class="goal-tag" style="color: var(--green);">\u2192 ${goal.enables.length}</span>` : ""}
+        ${goal.insights.length > 0 ? `<span class="goal-tag" style="color: var(--blue);">${goal.insights.length} insight${goal.insights.length > 1 ? "s" : ""}</span>` : ""}
       </div>
     </div>
   `).join("");
@@ -1605,6 +2114,9 @@ function switchView(view: string): void {
 function init(): void {
   // Apply saved theme on startup
   applyTheme(settings.theme);
+
+  // Build interconnection data
+  buildAgentReputation();
 
   renderTitleStatus();
   renderSidebarGoals();
