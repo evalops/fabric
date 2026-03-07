@@ -86,13 +86,16 @@ export class FabricDB {
     this.pool = new Pool(config);
   }
 
-  /** Run migrations (idempotent). */
+  /** Run all migrations in order (idempotent). */
   async migrate(): Promise<void> {
     const fs = await import("fs");
     const path = await import("path");
-    const migrationPath = path.join(__dirname, "migrations", "001_initial.sql");
-    const sql = fs.readFileSync(migrationPath, "utf-8");
-    await this.pool.query(sql);
+    const migrationsDir = path.join(__dirname, "migrations");
+    const files = fs.readdirSync(migrationsDir).filter((f: string) => f.endsWith(".sql")).sort();
+    for (const file of files) {
+      const sql = fs.readFileSync(path.join(migrationsDir, file), "utf-8");
+      await this.pool.query(sql);
+    }
   }
 
   /** Graceful shutdown. */
@@ -261,6 +264,57 @@ export class FabricDB {
     const { rows } = await this.pool.query(
       "SELECT * FROM activity_log ORDER BY timestamp DESC LIMIT $1",
       [limit || 50]
+    );
+    return rows;
+  }
+
+  // ── Metrics Aggregation ─────────────────────────────
+
+  /**
+   * Aggregate cost_events into hourly_rollups, materializing pre-computed
+   * rollups for fast dashboard queries. Idempotent — uses ON CONFLICT to
+   * update existing buckets.
+   */
+  async aggregateHourlyMetrics(hoursBack = 2): Promise<number> {
+    const { rowCount } = await this.pool.query(
+      `INSERT INTO hourly_rollups (hour, goal_count, total_cost, input_tokens, output_tokens, tool_calls, errors)
+       SELECT
+         date_trunc('hour', ce.timestamp) AS hour,
+         COUNT(DISTINCT ce.goal_id)::int AS goal_count,
+         ROUND(SUM(ce.cost_usd)::numeric, 6)::real AS total_cost,
+         SUM(ce.input_tokens)::bigint AS input_tokens,
+         SUM(ce.output_tokens)::bigint AS output_tokens,
+         COALESCE(tc.tool_calls, 0)::int AS tool_calls,
+         COALESCE(tc.errors, 0)::int AS errors
+       FROM cost_events ce
+       LEFT JOIN LATERAL (
+         SELECT
+           COUNT(*)::int AS tool_calls,
+           COUNT(*) FILTER (WHERE NOT success)::int AS errors
+         FROM tool_calls
+         WHERE date_trunc('hour', started_at) = date_trunc('hour', ce.timestamp)
+       ) tc ON true
+       WHERE ce.timestamp >= NOW() - make_interval(hours => $1)
+       GROUP BY date_trunc('hour', ce.timestamp), tc.tool_calls, tc.errors
+       ON CONFLICT (hour) DO UPDATE SET
+         goal_count = EXCLUDED.goal_count,
+         total_cost = EXCLUDED.total_cost,
+         input_tokens = EXCLUDED.input_tokens,
+         output_tokens = EXCLUDED.output_tokens,
+         tool_calls = EXCLUDED.tool_calls,
+         errors = EXCLUDED.errors`,
+      [hoursBack]
+    );
+    return rowCount ?? 0;
+  }
+
+  /** Read pre-aggregated hourly metrics for the dashboard. */
+  async getHourlyMetrics(hours = 24): Promise<any[]> {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM hourly_rollups
+       WHERE hour >= NOW() - make_interval(hours => $1)
+       ORDER BY hour`,
+      [hours]
     );
     return rows;
   }

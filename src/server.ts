@@ -15,13 +15,54 @@ import { FabricDB } from "./db/persistence";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const DATABASE_URL = process.env.DATABASE_URL;
+const MAX_BODY_BYTES = 1024 * 64; // 64KB max request body
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || "120", 10);
+
+// ── Rate Limiter ─────────────────────────────────────
+
+interface RateBucket {
+  count: number;
+  resetAt: number;
+}
+
+const rateBuckets = new Map<string, RateBucket>();
+
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now();
+  let bucket = rateBuckets.get(ip);
+  if (!bucket || now >= bucket.resetAt) {
+    bucket = { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
+    rateBuckets.set(ip, bucket);
+  }
+  bucket.count++;
+  return bucket.count <= RATE_LIMIT_MAX;
+}
+
+// Periodic cleanup of expired buckets
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, bucket] of rateBuckets) {
+    if (now >= bucket.resetAt) rateBuckets.delete(ip);
+  }
+}, RATE_LIMIT_WINDOW_MS);
+
+// ── Request Metrics ──────────────────────────────────
+
+const serverMetrics = {
+  requestCount: 0,
+  errorCount: 0,
+  activeConnections: 0,
+  sseClients: 0,
+  startedAt: Date.now(),
+};
 
 // ── Init ──────────────────────────────────────────────
 
 const engine = new FabricEngine();
 const db = DATABASE_URL ? new FabricDB(DATABASE_URL) : null;
 
-// Track connected WebSocket clients
+// Track connected SSE clients
 const wsClients = new Set<import("http").ServerResponse>();
 
 // Persist events to database and broadcast to WS clients
@@ -78,7 +119,16 @@ engine.on("fabric-event", async (event: FabricEvent) => {
 function parseBody(req: http.IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
     let body = "";
-    req.on("data", (chunk: string) => (body += chunk));
+    let bytes = 0;
+    req.on("data", (chunk: Buffer | string) => {
+      bytes += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
+      if (bytes > MAX_BODY_BYTES) {
+        req.destroy();
+        reject(new Error(`Request body exceeds ${MAX_BODY_BYTES} bytes`));
+        return;
+      }
+      body += chunk;
+    });
     req.on("end", () => {
       try {
         resolve(body ? JSON.parse(body) : {});
@@ -106,6 +156,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
   const parsed = url.parse(req.url || "", true);
   const path = parsed.pathname || "/";
   const method = req.method || "GET";
+  serverMetrics.requestCount++;
 
   // CORS preflight
   if (method === "OPTIONS") {
@@ -118,6 +169,17 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
+  // Rate limiting (skip SSE and health)
+  if (path !== "/events" && path !== "/health") {
+    const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim()
+      || req.socket.remoteAddress || "unknown";
+    if (!checkRateLimit(clientIp)) {
+      res.writeHead(429, { "Content-Type": "application/json", "Retry-After": "60" });
+      res.end(JSON.stringify({ error: "Rate limit exceeded. Try again later." }));
+      return;
+    }
+  }
+
   // ── SSE Event Stream ─────────────────────────────
   if (path === "/events" && method === "GET") {
     res.writeHead(200, {
@@ -127,13 +189,33 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       "Access-Control-Allow-Origin": "*",
     });
     wsClients.add(res);
-    req.on("close", () => wsClients.delete(res));
+    serverMetrics.sseClients = wsClients.size;
+    req.on("close", () => {
+      wsClients.delete(res);
+      serverMetrics.sseClients = wsClients.size;
+    });
     return;
   }
 
   // ── Health ────────────────────────────────────────
   if (path === "/health") {
     json(res, { status: "ok", goals: engine.getGoals().length, db: !!db });
+    return;
+  }
+
+  // ── Server Stats ──────────────────────────────────
+  if (path === "/api/server/stats" && method === "GET") {
+    const uptimeMs = Date.now() - serverMetrics.startedAt;
+    json(res, {
+      uptime_seconds: Math.round(uptimeMs / 1000),
+      requests_total: serverMetrics.requestCount,
+      errors_total: serverMetrics.errorCount,
+      sse_clients: serverMetrics.sseClients,
+      active_goals: engine.getGoals().filter(g => g.status === "active").length,
+      total_goals: engine.getGoals().length,
+      rate_limit_max: RATE_LIMIT_MAX,
+      db_connected: !!db,
+    });
     return;
   }
 
@@ -277,6 +359,33 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
+  // ── Metrics Aggregation ─────────────────────────────
+
+  // GET /api/metrics/hourly — pre-aggregated hourly metrics
+  if (path === "/api/metrics/hourly" && method === "GET") {
+    if (!db) {
+      json(res, []);
+      return;
+    }
+    const hours = parseInt(parsed.query.hours as string) || 24;
+    const data = await db.getHourlyMetrics(hours);
+    json(res, data);
+    return;
+  }
+
+  // POST /api/metrics/aggregate — trigger aggregation manually
+  if (path === "/api/metrics/aggregate" && method === "POST") {
+    if (!db) {
+      json(res, { error: "No database configured" }, 400);
+      return;
+    }
+    const body = await parseBody(req);
+    const hours = body.hours || 2;
+    const count = await db.aggregateHourlyMetrics(hours);
+    json(res, { status: "aggregated", rows_affected: count });
+    return;
+  }
+
   // ── Settings ──────────────────────────────────────
 
   // PUT /api/settings
@@ -296,6 +405,7 @@ const server = http.createServer(async (req, res) => {
   try {
     await handleRequest(req, res);
   } catch (err: any) {
+    serverMetrics.errorCount++;
     console.error("Request error:", err);
     json(res, { error: err.message || "Internal server error" }, 500);
   }
@@ -309,13 +419,30 @@ async function start(): Promise<void> {
     console.log("Migrations complete.");
   }
 
+  // Start periodic metrics aggregation (every 5 minutes)
+  if (db) {
+    const AGGREGATION_INTERVAL = 5 * 60_000;
+    const runAggregation = async () => {
+      try {
+        const count = await db.aggregateHourlyMetrics(2);
+        if (count > 0) console.log(`Metrics aggregation: ${count} hourly buckets updated`);
+      } catch (err) {
+        console.error("Metrics aggregation error:", err);
+      }
+    };
+    // Run once at startup after a brief delay, then periodically
+    setTimeout(runAggregation, 5000);
+    setInterval(runAggregation, AGGREGATION_INTERVAL);
+  }
+
   server.listen(PORT, () => {
     console.log(`Fabric API server listening on port ${PORT}`);
     console.log(`  Health: http://localhost:${PORT}/health`);
     console.log(`  Events: http://localhost:${PORT}/events (SSE)`);
     console.log(`  Goals:  http://localhost:${PORT}/api/goals`);
+    console.log(`  Stats:  http://localhost:${PORT}/api/server/stats`);
     if (db) {
-      console.log(`  DB:     connected`);
+      console.log(`  DB:     connected (metrics aggregation every 5m)`);
     } else {
       console.log(`  DB:     none (in-memory only)`);
     }

@@ -2,6 +2,17 @@ import { state, getTotalCost, getTotalTokens } from './state';
 import { formatTokens, formatDuration, stringToColor } from './utils';
 import { openGoalDetail } from './detail-panels';
 
+// Model-aware pricing (per 1M tokens) — mirrors ENGINE MODEL_PRICING
+const MODEL_PRICING: Record<string, { input: number; output: number; label: string }> = {
+  "claude-sonnet-4-6":  { input: 3.00,  output: 15.00, label: "Sonnet" },
+  "claude-opus-4-6":    { input: 15.00, output: 75.00, label: "Opus" },
+  "claude-haiku-4-5-20251001":   { input: 0.80,  output: 4.00,  label: "Haiku" },
+};
+
+function getModelPricing(): { input: number; output: number; label: string } {
+  return MODEL_PRICING[state.settings.model] || MODEL_PRICING["claude-sonnet-4-6"];
+}
+
 export function renderCosts(): void {
   const feed = document.getElementById("feed")!;
   const totalCost = getTotalCost();
@@ -9,6 +20,7 @@ export function renderCosts(): void {
   const totalTokens = tokens.input + tokens.output;
   const activeGoals = state.goals.filter(g => g.status === "active");
   const completedGoals = state.goals.filter(g => g.status === "complete");
+  const failedGoals = state.goals.filter(g => g.outcome === "error" || g.outcome === "budget_exhausted" || g.outcome === "turns_exhausted");
   const sortedGoals = [...state.goals].sort((a, b) => b.costUsd - a.costUsd);
   const maxGoalCost = sortedGoals[0]?.costUsd || 1;
 
@@ -17,6 +29,12 @@ export function renderCosts(): void {
   const costPerStep = completedSteps > 0 ? totalCost / completedSteps : 0;
   const costPerGoalCompleted = completedGoals.length > 0 ? completedGoals.reduce((s, g) => s + g.costUsd, 0) / completedGoals.length : 0;
   const avgDuration = completedGoals.length > 0 ? completedGoals.reduce((s, g) => s + ((g.completedAt || Date.now()) - g.startedAt), 0) / completedGoals.length : 0;
+  const avgTurns = completedGoals.length > 0 ? completedGoals.reduce((s, g) => s + (g.turnCount || 0), 0) / completedGoals.length : 0;
+  const totalRetries = state.goals.reduce((sum, g) => sum + (g.retryCount || 0), 0);
+  const successRate = (completedGoals.length + failedGoals.length) > 0
+    ? Math.round((completedGoals.filter(g => g.outcome === "success").length / (completedGoals.length + failedGoals.length)) * 100)
+    : 0;
+  const pricing = getModelPricing();
 
   const agentCosts: Record<string, { cost: number; tokens: number; goals: number }> = {};
   state.goals.forEach(g => {
@@ -125,15 +143,28 @@ export function renderCosts(): void {
             <div style="font-size: 20px; font-weight: 700; color: ${monthlyProjection > 500 ? "var(--amber)" : "var(--text-primary)"};">$${monthlyProjection.toFixed(0)}</div>
           </div>
         </div>
-      </div>
+        ${activeGoals.length > 0 && hourlyRate > 0 ? (() => {
+          const totalBudgetRemaining = Math.max(0, budgetLimit * activeGoals.length - activeGoals.reduce((s, g) => s + g.costUsd, 0));
+          const hoursToExhaustion = totalBudgetRemaining / hourlyRate;
+          const exhaustionColor = hoursToExhaustion < 1 ? "var(--red)" : hoursToExhaustion < 4 ? "var(--amber)" : "var(--green)";
+          const exhaustionLabel = hoursToExhaustion < 1 ? `${Math.round(hoursToExhaustion * 60)}m` : hoursToExhaustion < 24 ? `${hoursToExhaustion.toFixed(1)}h` : `${(hoursToExhaustion / 24).toFixed(1)}d`;
+          return `
+          <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--bg-surface); display: flex; align-items: center; gap: 12px;">
+            <div style="width: 10px; height: 10px; border-radius: 50%; background: ${exhaustionColor}; flex-shrink: 0; ${hoursToExhaustion < 1 ? "animation: graph-pulse 1.5s ease-in-out infinite;" : ""}"></div>
+            <div style="flex: 1;">
+              <div style="font-size: 13px; font-weight: 600; color: ${exhaustionColor};">Budget exhaustion in ~${exhaustionLabel}</div>
+              <div style="font-size: 11px; color: var(--text-muted);">$${totalBudgetRemaining.toFixed(2)} remaining across ${activeGoals.length} active goal${activeGoals.length > 1 ? "s" : ""} at $${hourlyRate.toFixed(2)}/hr</div>
+            </div>
+          </div>`;
+        })() : ""}
 
       <!-- Efficiency -->
       <div class="settings-card">
         <div class="settings-card-header">
           <div class="settings-card-title">Efficiency</div>
-          <div class="settings-card-desc">${completedSteps}/${totalSteps} steps completed across ${state.goals.length} goals</div>
+          <div class="settings-card-desc">${completedSteps}/${totalSteps} steps completed across ${state.goals.length} goals · ${pricing.label} pricing</div>
         </div>
-        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
           <div style="padding: 12px; background: var(--bg-surface); border-radius: var(--radius-sm);">
             <div style="font-size: 18px; font-weight: 700;">$${costPerStep.toFixed(2)}</div>
             <div style="font-size: 12px; color: var(--text-muted);">Cost per step</div>
@@ -143,12 +174,20 @@ export function renderCosts(): void {
             <div style="font-size: 12px; color: var(--text-muted);">Cost per completed goal</div>
           </div>
           <div style="padding: 12px; background: var(--bg-surface); border-radius: var(--radius-sm);">
-            <div style="font-size: 18px; font-weight: 700;">${totalTokens > 0 ? "$" + (totalCost / (totalTokens / 1000)).toFixed(4) : "\u2014"}</div>
-            <div style="font-size: 12px; color: var(--text-muted);">Cost per 1K tokens</div>
-          </div>
-          <div style="padding: 12px; background: var(--bg-surface); border-radius: var(--radius-sm);">
             <div style="font-size: 18px; font-weight: 700;">${avgDuration > 0 ? formatDuration(0, avgDuration) : "\u2014"}</div>
             <div style="font-size: 12px; color: var(--text-muted);">Avg goal duration</div>
+          </div>
+          <div style="padding: 12px; background: var(--bg-surface); border-radius: var(--radius-sm);">
+            <div style="font-size: 18px; font-weight: 700;">${avgTurns > 0 ? avgTurns.toFixed(1) : "\u2014"}</div>
+            <div style="font-size: 12px; color: var(--text-muted);">Avg turns per goal</div>
+          </div>
+          <div style="padding: 12px; background: var(--bg-surface); border-radius: var(--radius-sm);">
+            <div style="font-size: 18px; font-weight: 700; color: ${successRate >= 80 ? "var(--green)" : successRate >= 50 ? "var(--amber)" : "var(--red)"};">${successRate}%</div>
+            <div style="font-size: 12px; color: var(--text-muted);">Success rate</div>
+          </div>
+          <div style="padding: 12px; background: var(--bg-surface); border-radius: var(--radius-sm);">
+            <div style="font-size: 18px; font-weight: 700; color: ${totalRetries > 5 ? "var(--amber)" : "var(--text-primary)"};">${totalRetries}</div>
+            <div style="font-size: 12px; color: var(--text-muted);">Total retries</div>
           </div>
         </div>
       </div>
@@ -157,7 +196,7 @@ export function renderCosts(): void {
       <div class="settings-card">
         <div class="settings-card-header">
           <div class="settings-card-title">Token breakdown</div>
-          <div class="settings-card-desc">${formatTokens(tokens.input)} input \u00b7 ${formatTokens(tokens.output)} output \u00b7 ${totalTokens > 0 ? Math.round((tokens.output / totalTokens) * 100) : 0}% output-heavy</div>
+          <div class="settings-card-desc">${formatTokens(tokens.input)} input \u00b7 ${formatTokens(tokens.output)} output \u00b7 ${totalTokens > 0 ? Math.round((tokens.output / totalTokens) * 100) : 0}% output-heavy \u00b7 ${pricing.label} rates</div>
         </div>
         <div style="display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--bg-surface);">
           <div style="width: ${totalTokens > 0 ? (tokens.input / totalTokens) * 100 : 50}%; background: var(--blue); transition: width 0.3s;"></div>
@@ -168,13 +207,13 @@ export function renderCosts(): void {
             <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--blue); margin-right: 4px;"></span>
             <span style="color: var(--text-secondary);">Input</span>
             <span style="color: var(--text-muted); margin-left: 4px;">${formatTokens(tokens.input)}</span>
-            <span style="color: var(--text-muted); font-family: var(--font-mono);"> (~$${((tokens.input / 1_000_000) * 3).toFixed(2)})</span>
+            <span style="color: var(--text-muted); font-family: var(--font-mono);"> (~$${((tokens.input / 1_000_000) * pricing.input).toFixed(2)})</span>
           </div>
           <div>
             <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 4px;"></span>
             <span style="color: var(--text-secondary);">Output</span>
             <span style="color: var(--text-muted); margin-left: 4px;">${formatTokens(tokens.output)}</span>
-            <span style="color: var(--text-muted); font-family: var(--font-mono);"> (~$${((tokens.output / 1_000_000) * 15).toFixed(2)})</span>
+            <span style="color: var(--text-muted); font-family: var(--font-mono);"> (~$${((tokens.output / 1_000_000) * pricing.output).toFixed(2)})</span>
           </div>
         </div>
       </div>
