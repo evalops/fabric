@@ -1,7 +1,18 @@
 import { state, getTotalCost, callbacks } from './state';
-import { relativeTime } from './utils';
+import { relativeTime, formatDuration } from './utils';
 import { showToast } from './toasts';
 import { openGoalDetail } from './detail-panels';
+import type { Goal, GoalStatus } from './types';
+
+// ── All Work persistent filter state ──────────────────
+type SortField = "recent" | "progress" | "cost" | "turns" | "name";
+type SortDir = "asc" | "desc";
+const workState = {
+  statusFilter: new Set<GoalStatus | "all">(["all"]),
+  sort: "recent" as SortField,
+  sortDir: "desc" as SortDir,
+  search: "",
+};
 
 export function renderTitleStatus(): void {
   const el = document.getElementById("titlebar-status");
@@ -27,7 +38,7 @@ export function renderSidebarGoals(): void {
     const offset = ringCircumference - (g.progress / 100) * ringCircumference;
     const ringClass = g.status === "blocked" ? "blocked" : g.status === "complete" ? "complete" : "";
     return `
-      <div class="sidebar-goal" data-goal="${g.id}">
+      <div class="sidebar-goal" data-goal="${g.id}" data-status="${g.status}">
         <svg class="progress-ring" viewBox="0 0 20 20">
           <circle class="ring-bg" cx="10" cy="10" r="7" />
           <circle class="ring-fill ${ringClass}" cx="10" cy="10" r="7"
@@ -91,40 +102,163 @@ export function renderNeedsYou(): void {
 export function renderAllWork(): void {
   const feed = document.getElementById("feed")!;
 
-  feed.innerHTML = state.goals.map(goal => `
-    <div class="goal-card" data-goal="${goal.id}">
-      <div class="goal-top">
-        <div class="goal-indicator ind-${goal.status}"></div>
-        <div class="goal-info">
-          <div class="goal-name">${goal.title}</div>
-          <div class="goal-summary">${goal.summary}</div>
-        </div>
-        <div class="goal-right">
-          <div class="goal-pct">${Math.round(goal.progress)}%</div>
-          <div class="goal-pct-label">complete</div>
-        </div>
+  // Filter
+  let goals = [...state.goals];
+  if (!workState.statusFilter.has("all")) {
+    goals = goals.filter(g => workState.statusFilter.has(g.status as GoalStatus));
+  }
+  if (workState.search) {
+    const q = workState.search.toLowerCase();
+    goals = goals.filter(g =>
+      g.title.toLowerCase().includes(q) ||
+      g.summary.toLowerCase().includes(q) ||
+      g.areasAffected.some(a => a.toLowerCase().includes(q))
+    );
+  }
+
+  // Sort
+  const dir = workState.sortDir === "desc" ? -1 : 1;
+  goals.sort((a, b) => {
+    switch (workState.sort) {
+      case "recent": return dir * (b.startedAt - a.startedAt);
+      case "progress": return dir * (a.progress - b.progress);
+      case "cost": return dir * (a.costUsd - b.costUsd);
+      case "turns": return dir * (a.turnCount - b.turnCount);
+      case "name": return dir * a.title.localeCompare(b.title);
+      default: return 0;
+    }
+  });
+
+  // Summary stats
+  const active = state.goals.filter(g => g.status === "active").length;
+  const complete = state.goals.filter(g => g.status === "complete").length;
+  const blocked = state.goals.filter(g => g.status === "blocked").length;
+  const failed = state.goals.filter(g => g.status === "failed").length;
+  const totalCost = state.goals.reduce((s, g) => s + g.costUsd, 0);
+
+  const statusBtn = (key: GoalStatus | "all", label: string, count: number, color?: string) => {
+    const isActive = workState.statusFilter.has(key);
+    return `<button class="work-filter-btn${isActive ? " active" : ""}" data-status="${key}"
+      style="--btn-color: ${color || "var(--accent)"}; padding: 4px 10px; font-size: 11px; font-weight: 500;
+      border: 1px solid ${isActive ? (color || "var(--accent)") : "var(--border)"};
+      background: ${isActive ? `color-mix(in srgb, ${color || "var(--accent)"} 10%, transparent)` : "var(--bg-surface)"};
+      color: ${isActive ? (color || "var(--accent)") : "var(--text-secondary)"};
+      border-radius: 12px; cursor: pointer; white-space: nowrap; font-family: var(--font-sans);">${label}${count > 0 ? ` (${count})` : ""}</button>`;
+  };
+
+  const sortBtn = (field: SortField, label: string) => {
+    const isActive = workState.sort === field;
+    const arrow = isActive ? (workState.sortDir === "desc" ? " \u2193" : " \u2191") : "";
+    return `<button class="work-sort-btn${isActive ? " active" : ""}" data-sort="${field}"
+      style="padding: 3px 8px; font-size: 11px; border: 1px solid ${isActive ? "var(--accent)" : "var(--border)"};
+      background: ${isActive ? "var(--accent-soft)" : "transparent"}; color: ${isActive ? "var(--accent)" : "var(--text-muted)"};
+      border-radius: var(--radius-xs); cursor: pointer; font-family: var(--font-sans);">${label}${arrow}</button>`;
+  };
+
+  feed.innerHTML = `
+    <div class="work-toolbar" style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; padding: 14px 16px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius);">
+      <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+        ${statusBtn("all", "All", state.goals.length)}
+        ${statusBtn("active", "Active", active, "var(--blue)")}
+        ${statusBtn("complete", "Done", complete, "var(--green)")}
+        ${statusBtn("blocked", "Blocked", blocked, "var(--amber)")}
+        ${statusBtn("failed", "Failed", failed, "var(--red)")}
+        <input type="text" id="work-search" placeholder="Search goals..." value="${workState.search}"
+          style="margin-left: auto; padding: 4px 10px; font-size: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-base); color: var(--text-primary); outline: none; width: 160px;" />
       </div>
-      <div class="goal-bar">
-        <div class="goal-bar-fill" style="width: ${goal.progress}%"></div>
-      </div>
-      <div class="goal-footer">
-        <span class="goal-tag">${goal.status}</span>
-        ${goal.outcome ? `<span class="goal-tag outcome-badge outcome-${goal.outcome}" style="border: none; padding: 2px 6px;">${goal.outcome.replace(/_/g, " ")}</span>` : ""}
-        <span class="goal-tag">${goal.agentCount} agent${goal.agentCount !== 1 ? "s" : ""}</span>
-        <span class="goal-tag">${goal.steps.filter(s => s.state === "done").length}/${goal.steps.length} steps</span>
-        <span class="goal-tag">${goal.turnCount || 0} turns</span>
-        <span class="goal-tag">$${goal.costUsd.toFixed(2)}</span>
-        ${goal.retryCount ? `<span class="goal-tag" style="color: var(--amber);">${goal.retryCount} retries</span>` : ""}
-        ${goal.blockedBy.length > 0 ? `<span class="goal-tag" style="color: var(--amber);">${goal.blockedBy.length} dep</span>` : ""}
-        ${goal.enables.length > 0 ? `<span class="goal-tag" style="color: var(--green);">\u2192 ${goal.enables.length}</span>` : ""}
-        ${goal.insights.length > 0 ? `<span class="goal-tag" style="color: var(--blue);">${goal.insights.length} insight${goal.insights.length > 1 ? "s" : ""}</span>` : ""}
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <span style="font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;">Sort</span>
+        ${sortBtn("recent", "Recent")}
+        ${sortBtn("progress", "Progress")}
+        ${sortBtn("cost", "Cost")}
+        ${sortBtn("turns", "Turns")}
+        ${sortBtn("name", "Name")}
+        <span style="margin-left: auto; font-size: 11px; color: var(--text-muted);">${goals.length} goal${goals.length !== 1 ? "s" : ""} \u00b7 $${totalCost.toFixed(2)} total</span>
       </div>
     </div>
-  `).join("");
 
+    ${goals.length === 0 ? `<div style="text-align: center; color: var(--text-muted); padding: 48px 0; font-size: 13px;">No goals match your filters</div>` : ""}
+
+    ${goals.map(goal => `
+      <div class="goal-card" data-goal="${goal.id}" data-status="${goal.status}">
+        <div class="goal-top">
+          <div class="goal-indicator ind-${goal.status}"></div>
+          <div class="goal-info">
+            <div class="goal-name">${goal.title}</div>
+            <div class="goal-summary">${goal.summary}</div>
+          </div>
+          <div class="goal-right">
+            <div class="goal-pct">${Math.round(goal.progress)}%</div>
+            <div class="goal-pct-label">complete</div>
+          </div>
+        </div>
+        <div class="goal-bar">
+          <div class="goal-bar-fill" style="width: ${goal.progress}%"></div>
+        </div>
+        <div class="goal-footer">
+          <span class="goal-tag">${goal.status}</span>
+          ${goal.outcome ? `<span class="goal-tag outcome-badge outcome-${goal.outcome}" style="border: none; padding: 2px 6px;">${goal.outcome.replace(/_/g, " ")}</span>` : ""}
+          <span class="goal-tag">${goal.agentCount} agent${goal.agentCount !== 1 ? "s" : ""}</span>
+          <span class="goal-tag">${goal.steps.filter(s => s.state === "done").length}/${goal.steps.length} steps</span>
+          <span class="goal-tag">${goal.turnCount || 0} turns</span>
+          <span class="goal-tag">$${goal.costUsd.toFixed(2)}</span>
+          <span class="goal-tag">${formatDuration(goal.startedAt, goal.completedAt)}</span>
+          ${goal.retryCount ? `<span class="goal-tag" style="color: var(--amber);">${goal.retryCount} retries</span>` : ""}
+          ${goal.blockedBy.length > 0 ? `<span class="goal-tag" style="color: var(--amber);">${goal.blockedBy.length} dep</span>` : ""}
+          ${goal.enables.length > 0 ? `<span class="goal-tag" style="color: var(--green);">\u2192 ${goal.enables.length}</span>` : ""}
+          ${goal.insights.length > 0 ? `<span class="goal-tag" style="color: var(--blue);">${goal.insights.length} insight${goal.insights.length > 1 ? "s" : ""}</span>` : ""}
+        </div>
+      </div>
+    `).join("")}
+  `;
+
+  // Wire goal card clicks
   feed.querySelectorAll(".goal-card").forEach(card => {
     card.addEventListener("click", () => callbacks.openGoalDetail((card as HTMLElement).dataset.goal!));
   });
+
+  // Wire status filter
+  feed.querySelectorAll(".work-filter-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const status = (btn as HTMLElement).dataset.status as GoalStatus | "all";
+      if (status === "all") {
+        workState.statusFilter.clear();
+        workState.statusFilter.add("all");
+      } else {
+        workState.statusFilter.delete("all");
+        if (workState.statusFilter.has(status)) {
+          workState.statusFilter.delete(status);
+          if (workState.statusFilter.size === 0) workState.statusFilter.add("all");
+        } else {
+          workState.statusFilter.add(status);
+        }
+      }
+      renderAllWork();
+    });
+  });
+
+  // Wire sort
+  feed.querySelectorAll(".work-sort-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const field = (btn as HTMLElement).dataset.sort as SortField;
+      if (workState.sort === field) {
+        workState.sortDir = workState.sortDir === "desc" ? "asc" : "desc";
+      } else {
+        workState.sort = field;
+        workState.sortDir = "desc";
+      }
+      renderAllWork();
+    });
+  });
+
+  // Wire search
+  const searchInput = document.getElementById("work-search") as HTMLInputElement | null;
+  if (searchInput) {
+    searchInput.addEventListener("input", () => {
+      workState.search = searchInput.value;
+      renderAllWork();
+    });
+  }
 }
 
 // Track which activity filter is selected

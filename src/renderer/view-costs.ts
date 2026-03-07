@@ -157,6 +157,7 @@ export function renderCosts(): void {
             </div>
           </div>`;
         })() : ""}
+      </div>
 
       <!-- Efficiency -->
       <div class="settings-card">
