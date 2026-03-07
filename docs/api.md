@@ -118,20 +118,50 @@ Get a single goal with its steps.
 
 #### `POST /api/goals`
 
-Create a new goal and begin agent execution.
+Create a new goal and begin agent execution. Supports optional per-goal model override and budget/turns limits.
 
 **Request body:**
 ```json
 {
-  "description": "Fix the login bug in the auth module"
+  "description": "Fix the login bug in the auth module",
+  "model": "opus",
+  "maxBudgetUsd": 5.00,
+  "maxTurns": 50
 }
 ```
+
+Only `description` is required. `model` can be `"sonnet"`, `"opus"`, or `"haiku"`. If omitted, the engine default is used.
 
 **Response:** `201 Created`
 ```json
 {
   "id": "goal-2-1709...",
   "status": "created"
+}
+```
+
+#### `POST /api/goals/batch`
+
+Create multiple goals at once. All goals share the same batch ID for tracking. Maximum 20 goals per batch.
+
+**Request body:**
+```json
+{
+  "descriptions": [
+    "Fix the login bug",
+    "Add unit tests for auth module",
+    "Update API documentation"
+  ],
+  "model": "sonnet",
+  "maxBudgetUsd": 2.00
+}
+```
+
+**Response:** `201 Created`
+```json
+{
+  "batchId": "batch-1709...",
+  "goalIds": ["goal-1-...", "goal-2-...", "goal-3-..."]
 }
 ```
 
@@ -407,6 +437,76 @@ Update engine configuration at runtime.
 }
 ```
 
+---
+
+### Webhooks
+
+#### `POST /api/webhooks`
+
+Register a webhook extension that posts events to an external URL.
+
+**Request body:**
+```json
+{
+  "url": "https://hooks.slack.com/services/...",
+  "format": "slack",
+  "events": ["observability", "attention", "retry"],
+  "outcomes": ["success", "error"],
+  "secret": "optional-hmac-secret",
+  "headers": { "X-Custom": "value" }
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `url` | Yes | Webhook URL to POST to |
+| `format` | No | `"slack"`, `"discord"`, or `"raw"` (default: `"raw"`) |
+| `events` | No | Event types to send (default: all) |
+| `outcomes` | No | Only send for these goal outcomes |
+| `secret` | No | HMAC-SHA256 secret for `X-Fabric-Signature` header |
+| `headers` | No | Custom headers to include |
+
+**Response:** `201 Created`
+```json
+{
+  "status": "webhook registered",
+  "name": "webhook-hooks.slack.com"
+}
+```
+
+#### `GET /api/webhooks`
+
+List registered webhook extension names.
+
+---
+
+### Data Export
+
+#### `GET /api/export/goals`
+
+Export all goals as JSON or CSV.
+
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `format` | string | `json` | `"json"` or `"csv"` |
+
+Returns a downloadable file with `Content-Disposition` header.
+
+#### `GET /api/export/costs`
+
+Export hourly cost data as JSON or CSV.
+
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `format` | string | `json` | `"json"` or `"csv"` |
+| `hours` | integer | 24 | Lookback window |
+
+---
+
 ## Error Responses
 
 All errors follow this format:
@@ -421,4 +521,5 @@ All errors follow this format:
 |--------|---------|
 | 400 | Bad request (missing/invalid parameters) |
 | 404 | Resource not found |
+| 429 | Rate limit exceeded (120 requests/minute per IP) |
 | 500 | Internal server error |
