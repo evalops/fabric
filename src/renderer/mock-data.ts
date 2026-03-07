@@ -344,14 +344,50 @@ export function simulateTick(): void {
       g.costUsd += Math.random() * 0.15;
       g.inputTokens += Math.floor(Math.random() * 8000);
       g.outputTokens += Math.floor(Math.random() * 3000);
+      g.turnCount += 1;
+      // Simulate a tool call
+      const tools = ["Read", "Grep", "Glob", "Edit", "Bash", "Write"];
+      const tool = tools[Math.floor(Math.random() * tools.length)];
+      g.toolCalls.push({
+        tool,
+        startedAt: Date.now(),
+        durationMs: Math.floor(Math.random() * 300) + 10,
+        success: Math.random() > 0.08,
+        goalId: g.id,
+      });
     }
   });
 
+  // Update sidebar footer dynamically
   const footerSpend = document.getElementById("footer-spend");
   if (footerSpend) footerSpend.textContent = `$${getTotalCost().toFixed(2)} today`;
+  const footerAgents = document.getElementById("footer-agents");
+  if (footerAgents) {
+    const working = state.agents.filter(a => a.status === "working").length;
+    footerAgents.textContent = `${working}/${state.agents.length} agents`;
+  }
 
   callbacks.renderSidebarGoals();
   callbacks.renderTitleStatus();
+}
+
+function generateToolCalls(goalId: string, steps: any[]): any[] {
+  const tools = ["Read", "Grep", "Glob", "Edit", "Bash", "Write", "WebFetch", "LSP"];
+  const calls: any[] = [];
+  const doneSteps = steps.filter((s: any) => s.state === "done" || s.state === "running").length;
+  const count = doneSteps * 3 + Math.floor(Math.random() * 5);
+  for (let i = 0; i < count; i++) {
+    const tool = tools[Math.floor(Math.random() * tools.length)];
+    const success = Math.random() > 0.05;
+    calls.push({
+      tool,
+      startedAt: NOW - Math.floor(Math.random() * 60) * MIN,
+      durationMs: Math.floor(Math.random() * 500) + 10,
+      success,
+      goalId,
+    });
+  }
+  return calls;
 }
 
 export function initMockData(): void {
@@ -359,7 +395,7 @@ export function initMockData(): void {
     ...a,
     goalHistory: [],
     frequentPartners: [],
-    successRate: 0.92 + Math.random() * 0.08,
+    successRate: Math.round(92 + Math.random() * 8),
   }));
 
   state.goals = _rawGoals.map((g: any) => ({
@@ -369,8 +405,8 @@ export function initMockData(): void {
     insights: _goalInterconnections[g.id]?.insights || [],
     areasAffected: _goalInterconnections[g.id]?.areasAffected || [],
     turnCount: Math.floor(Math.random() * 20) + 5,
-    toolCalls: [],
-    retryCount: 0,
+    toolCalls: generateToolCalls(g.id, g.steps),
+    retryCount: g.status === "blocked" ? 1 : 0,
   }));
 
   state.attentionItems = [

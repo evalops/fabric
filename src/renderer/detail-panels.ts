@@ -74,8 +74,11 @@ function renderSteeringInput(goalId: string): string {
     `;
   }
 
-  // Show steering input for active goals
+  // Show steering input + pause button for active goals
   return `
+    <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+      <button id="pause-goal-btn" style="padding: 8px 16px; background: var(--amber-soft); color: var(--amber); border: 1px solid var(--amber); border-radius: var(--radius-sm); font-size: 12px; cursor: pointer; font-weight: 600;">Pause</button>
+    </div>
     <div class="detail-section-title">Steer this goal</div>
     <div style="display: flex; gap: 8px; margin-bottom: 16px;">
       <input type="text" id="steering-input" placeholder="Redirect the agent..." style="flex: 1; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-surface); color: var(--text-primary); font-size: 13px; outline: none;" />
@@ -125,7 +128,7 @@ export function openAgentDetail(agentId: string): void {
     <div class="detail-meta" style="margin-top: 0;">
       <div class="detail-meta-item">
         <span class="detail-meta-label">Success rate</span>
-        <span class="detail-meta-value">${Math.round(agent.successRate * 100)}%</span>
+        <span class="detail-meta-value">${Math.round(agent.successRate)}%</span>
       </div>
       <div class="detail-meta-item">
         <span class="detail-meta-label">Goals worked</span>
@@ -429,6 +432,26 @@ export function openGoalDetail(goalId: string): void {
         bridge.resumeGoal(goalId);
         closeDetail();
       }
+    });
+  }
+
+  // Wire pause button
+  const pauseBtn = panel.querySelector("#pause-goal-btn");
+  if (pauseBtn) {
+    pauseBtn.addEventListener("click", () => {
+      const bridge = (window as any).fabric;
+      if (bridge?.pauseGoal) {
+        bridge.pauseGoal(goalId);
+      }
+      // Update local state immediately for responsiveness
+      const g = state.goals.find(x => x.id === goalId);
+      if (g) {
+        g.status = "blocked";
+        callbacks.renderSidebarGoals();
+        callbacks.renderTitleStatus();
+      }
+      showToast("Goal paused", `"${goal.title}" has been paused`, "var(--amber)");
+      closeDetail();
     });
   }
 

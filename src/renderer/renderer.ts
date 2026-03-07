@@ -2,7 +2,7 @@
 // This file wires together all modules and initializes the app.
 
 import type { Goal, CmdkAction } from './types';
-import { state, bridge, callbacks, applyTheme, toggleDarkMode } from './state';
+import { state, bridge, callbacks, applyTheme, toggleDarkMode, getTotalCost } from './state';
 import { showToast } from './toasts';
 import { initMockData, simulateTick } from './mock-data';
 import { openGoalDetail, openAgentDetail, closeDetail } from './detail-panels';
@@ -148,6 +148,15 @@ function init(): void {
   renderTitleStatus();
   renderSidebarGoals();
   renderNeedsYou();
+
+  // Set initial footer values
+  const footerAgents = document.getElementById("footer-agents");
+  if (footerAgents) {
+    const working = state.agents.filter(a => a.status === "working").length;
+    footerAgents.textContent = `${working}/${state.agents.length} agents`;
+  }
+  const footerSpend = document.getElementById("footer-spend");
+  if (footerSpend) footerSpend.textContent = `$${getTotalCost().toFixed(2)} today`;
 
   // Sidebar nav
   document.querySelectorAll(".sidebar-item[data-view]").forEach(el => {
