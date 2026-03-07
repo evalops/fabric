@@ -126,7 +126,7 @@ function retryDelay(attempt: number, config: RetryConfig): number {
 // ── Custom MCP Tools for Fabric ───────────────────────
 // These tools let the agent interact with Fabric's work graph
 
-function createFabricTools(engine: FabricEngine) {
+function createFabricTools(engine: FabricEngine, extensionTools: ReturnType<typeof tool>[] = []) {
   return createSdkMcpServer({
     name: "fabric",
     tools: [
@@ -172,8 +172,26 @@ function createFabricTools(engine: FabricEngine) {
           return { content: [{ type: "text" as const, text: `Goal ${args.goalId} marked complete.` }] };
         }
       ),
+      ...extensionTools,
     ],
   });
+}
+
+// ── Extension System (inspired by pi-mono) ───────────
+// Extensions can register tools, inject prompt snippets, and hook into events
+
+export interface FabricExtension {
+  name: string;
+  /** Additional instructions injected into the orchestrator's system prompt */
+  promptSnippet?: string;
+  /** Additional tools to register on the MCP server */
+  tools?: ReturnType<typeof tool>[];
+  /** Hook called before goal execution begins */
+  beforeGoal?: (goalId: string, description: string) => Promise<void>;
+  /** Hook called after goal execution completes */
+  afterGoal?: (goalId: string, outcome: GoalOutcome | undefined) => Promise<void>;
+  /** Hook called on every fabric event */
+  onEvent?: (event: FabricEvent) => void;
 }
 
 // ── Fabric Engine ─────────────────────────────────────
@@ -190,9 +208,30 @@ export class FabricEngine extends EventEmitter {
   private pendingToolCalls: Map<string, { tool: string; startedAt: number; goalId: string }> = new Map();
   // Steering queue: messages injected mid-execution (inspired by pi-mono)
   private steeringQueues: Map<string, string[]> = new Map();
+  // Extension system (inspired by pi-mono)
+  private extensions: FabricExtension[] = [];
 
   constructor() {
     super();
+  }
+
+  /**
+   * Register an extension.
+   * Extensions can add tools, inject prompt context, and hook into lifecycle events.
+   */
+  registerExtension(ext: FabricExtension): void {
+    this.extensions.push(ext);
+    this.emitEvent({
+      type: "activity",
+      data: { time: Date.now(), text: `<strong>system</strong> extension "${ext.name}" registered` },
+    });
+  }
+
+  /**
+   * Get all registered extension names.
+   */
+  getExtensions(): string[] {
+    return this.extensions.map(e => e.name);
   }
 
   getGoals(): FabricGoal[] {
@@ -305,7 +344,20 @@ export class FabricEngine extends EventEmitter {
     this.abortControllers.set(goalId, abortController);
     this.steeringQueues.set(goalId, []);
 
-    const fabricTools = createFabricTools(this);
+    // Collect extension tools and prompt snippets
+    const extTools = this.extensions.flatMap(e => e.tools || []);
+    const extPromptSnippets = this.extensions
+      .filter(e => e.promptSnippet)
+      .map(e => `[Extension: ${e.name}]\n${e.promptSnippet}`)
+      .join("\n\n");
+
+    // Notify extensions before execution
+    for (const ext of this.extensions) {
+      if (ext.beforeGoal) await ext.beforeGoal(goalId, description);
+    }
+
+    const fabricTools = createFabricTools(this, extTools);
+    const extToolNames = extTools.map((t: any) => `mcp__fabric__${t.name || "unknown"}`);
 
     const buildOptions = (): Options => ({
       abortController,
@@ -330,7 +382,8 @@ export class FabricEngine extends EventEmitter {
         },
       },
       tools: ["Read", "Grep", "Glob", "Bash", "Edit", "Write", "Agent",
-              "mcp__fabric__report_steps", "mcp__fabric__update_step", "mcp__fabric__complete_goal"],
+              "mcp__fabric__report_steps", "mcp__fabric__update_step", "mcp__fabric__complete_goal",
+              ...extToolNames],
       mcpServers: { fabric: fabricTools },
       allowedTools: [
         "Read", "Grep", "Glob",
@@ -376,7 +429,7 @@ IMPORTANT: You have access to Fabric tools for managing the work graph. Follow t
 4. Use subagents (researcher, implementer, reviewer) via the Agent tool for specialized work.
 5. When all steps are done, call \`mcp__fabric__complete_goal\` with a summary.
 
-Work in the current directory. Be efficient and focused.`;
+Work in the current directory. Be efficient and focused.${extPromptSnippets ? `\n\n--- Extension Context ---\n${extPromptSnippets}` : ""}`;
 
     // Retry loop with exponential backoff (pi-mono pattern)
     let attempt = 0;
@@ -447,6 +500,13 @@ Work in the current directory. Be efficient and focused.`;
 
     this.abortControllers.delete(goalId);
     this.steeringQueues.delete(goalId);
+
+    // Notify extensions after execution
+    for (const ext of this.extensions) {
+      if (ext.afterGoal) {
+        try { await ext.afterGoal(goalId, goal.outcome); } catch (e) { /* extension errors are non-fatal */ }
+      }
+    }
   }
 
   /**
@@ -765,5 +825,11 @@ Work in the current directory. Be efficient and focused.`;
 
   private emitEvent(event: FabricEvent): void {
     this.emit("fabric-event", event);
+    // Notify extensions
+    for (const ext of this.extensions) {
+      if (ext.onEvent) {
+        try { ext.onEvent(event); } catch { /* extension errors are non-fatal */ }
+      }
+    }
   }
 }
