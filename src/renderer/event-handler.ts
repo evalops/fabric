@@ -81,12 +81,18 @@ export function handleFabricEvent(event: any): void {
       if (tcGoal) {
         tcGoal.toolCalls.push(event.data);
       }
-      // Surface errors as activity
+      // Surface errors as activity + update error badge
       if (!event.data.success) {
         state.activityLog.unshift({
           time: Date.now(),
           text: `<strong>tool error</strong> ${event.data.tool} failed after ${event.data.durationMs}ms`,
         });
+        const errorBadge = document.getElementById("error-count");
+        if (errorBadge) {
+          const count = parseInt(errorBadge.textContent || "0") + 1;
+          errorBadge.textContent = String(count);
+          errorBadge.style.display = "";
+        }
         if (state.currentView === "activity") renderActivity();
       }
       break;

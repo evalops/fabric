@@ -19,14 +19,25 @@ export function renderTitleStatus(): void {
   if (!el) return;
   const active = state.goals.filter(g => g.status === "active").length;
   const blocked = state.goals.filter(g => g.status === "blocked").length;
+  const failed = state.goals.filter(g => g.status === "failed").length;
   const working = state.agents.filter(a => a.status === "working").length;
   const totalCost = getTotalCost();
   const parts: string[] = [];
   if (active) parts.push(`${active} active`);
   if (blocked) parts.push(`${blocked} blocked`);
-  parts.push(`${working} agents working`);
-  parts.push(`$${totalCost.toFixed(2)} spent`);
+  if (failed) parts.push(`${failed} failed`);
+  parts.push(`${working} agents`);
+  parts.push(`$${totalCost.toFixed(2)}`);
   el.textContent = parts.join(" \u00b7 ");
+
+  // Update connection indicator
+  const connEl = document.getElementById("connection-indicator");
+  if (connEl) {
+    const connected = working > 0 || active > 0;
+    connEl.classList.toggle("disconnected", !connected);
+    const label = connEl.querySelector(".connection-label");
+    if (label) label.textContent = connected ? "Live" : "Idle";
+  }
 }
 
 export function renderSidebarGoals(): void {
@@ -59,12 +70,27 @@ export function renderNeedsYou(): void {
   const feed = document.getElementById("feed")!;
 
   if (state.attentionItems.length === 0) {
+    const working = state.agents.filter(a => a.status === "working").length;
+    const activeGoals = state.goals.filter(g => g.status === "active").length;
     feed.innerHTML = `
       <div class="empty-state">
-        <div class="empty-state-icon">\u2713</div>
-        <div class="empty-state-text">Nothing needs your attention right now.<br/>Agents are handling everything.</div>
+        <div class="empty-state-icon" style="font-size: 48px; margin-bottom: 8px;">\u2713</div>
+        <div class="empty-state-text" style="font-size: 15px; font-weight: 600; margin-bottom: 8px;">All clear</div>
+        <div style="font-size: 13px; color: var(--text-muted); max-width: 320px; line-height: 1.5;">
+          Nothing needs your attention right now.
+          ${working > 0 ? `<strong>${working}</strong> agent${working > 1 ? "s are" : " is"} actively working on <strong>${activeGoals}</strong> goal${activeGoals > 1 ? "s" : ""}.` : "All agents are idle."}
+        </div>
+        <div style="margin-top: 16px; display: flex; gap: 8px;">
+          <button class="empty-action-btn" data-action="all-work" style="padding: 6px 14px; font-size: 12px; background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent); border-radius: var(--radius-sm); cursor: pointer; font-family: var(--font-sans);">View all work</button>
+          <button class="empty-action-btn" data-action="agents" style="padding: 6px 14px; font-size: 12px; background: var(--bg-surface); color: var(--text-secondary); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; font-family: var(--font-sans);">View agents</button>
+        </div>
       </div>
     `;
+    feed.querySelectorAll(".empty-action-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        callbacks.switchView((btn as HTMLElement).dataset.action!);
+      });
+    });
     return;
   }
 
@@ -327,12 +353,34 @@ export function renderActivity(): void {
       <input type="text" id="activity-search" placeholder="Filter..." value="${activitySearchQuery}" style="margin-left: auto; padding: 4px 10px; font-size: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-surface); color: var(--text-primary); outline: none; width: 140px;" />
     </div>
     ${filtered.length === 0 ? `<div style="text-align: center; color: var(--text-muted); padding: 32px 0; font-size: 13px;">No activity matching filter</div>` : ""}
-    ${filtered.map(ev => `
-      <div class="activity-item">
-        <span class="activity-time">${relativeTime(ev.time)}</span>
-        <span class="activity-text">${ev.text}</span>
-      </div>
-    `).join("")}
+    ${(() => {
+      // Group events by time buckets
+      const now = Date.now();
+      const buckets = [
+        { label: "Just now", maxAge: 60_000, live: true },
+        { label: "Minutes ago", maxAge: 3_600_000, live: false },
+        { label: "Earlier", maxAge: Infinity, live: false },
+      ];
+      let lastBucket = -1;
+      return filtered.map(ev => {
+        const age = now - ev.time;
+        const bucketIdx = buckets.findIndex(b => age < b.maxAge);
+        const bucket = buckets[bucketIdx] || buckets[buckets.length - 1];
+        let header = "";
+        if (bucketIdx !== lastBucket) {
+          lastBucket = bucketIdx;
+          header = `<div class="activity-time-group">
+            <span class="activity-time-group-dot${bucket.live ? " live" : ""}"></span>
+            ${bucket.label}
+          </div>`;
+        }
+        return `${header}
+          <div class="activity-item">
+            <span class="activity-time">${relativeTime(ev.time)}</span>
+            <span class="activity-text">${ev.text}</span>
+          </div>`;
+      }).join("");
+    })()}
   `;
 
   // Wire filter buttons

@@ -10,6 +10,10 @@
 <body>
   <div class="titlebar">
     <span class="titlebar-title">Fabric</span>
+    <span class="connection-indicator" id="connection-indicator" title="Engine connection">
+      <span class="connection-dot"></span>
+      <span class="connection-label">Connected</span>
+    </span>
     <span class="titlebar-subtitle" id="titlebar-status"></span>
     <span class="titlebar-shortcut" title="Command bar">&#8984;K</span>
   </div>
@@ -30,6 +34,7 @@
         <div class="sidebar-item" data-view="activity">
           <span class="sidebar-icon">&#8942;</span>
           <span>Activity</span>
+          <span class="sidebar-badge" id="error-count" style="display: none; background: var(--red);">0</span>
         </div>
         <div class="sidebar-item" data-view="agents">
           <span class="sidebar-icon">&#10022;</span>

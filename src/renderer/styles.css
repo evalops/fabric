@@ -93,6 +93,43 @@ html, body {
   letter-spacing: -0.3px;
   margin-left: 64px;
 }
+.connection-indicator {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 6px;
+  border-radius: 10px;
+  background: var(--green-soft);
+  border: 1px solid color-mix(in srgb, var(--green) 20%, transparent);
+  font-size: 10px;
+  color: var(--green);
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  cursor: default;
+  transition: all 0.3s;
+}
+.connection-indicator.disconnected {
+  background: var(--red-soft);
+  border-color: color-mix(in srgb, var(--red) 20%, transparent);
+  color: var(--red);
+}
+.connection-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: connPulse 2s ease-in-out infinite;
+}
+.connection-indicator.disconnected .connection-dot {
+  background: var(--red);
+  animation: none;
+}
+@keyframes connPulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--green); }
+  50% { opacity: 0.7; box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 20%, transparent); }
+}
 .titlebar-subtitle {
   font-size: 12px;
   color: var(--text-muted);
@@ -1016,6 +1053,85 @@ body.dark .detail-overlay::before { background: rgba(0,0,0,0.4); }
   color: var(--text-muted);
   width: 60px;
   flex-shrink: 0;
+}
+
+/* ── Detail Tabs ──────────────────────────────────── */
+.detail-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.detail-tab {
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  background: none;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  font-family: var(--font-sans);
+}
+.detail-tab:hover { color: var(--text-secondary); }
+.detail-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.detail-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--bg-surface);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-left: 6px;
+}
+.detail-tab.active .detail-tab-badge {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.detail-tab-content { display: none; }
+.detail-tab-content.active { display: block; }
+
+/* ── Activity Time Groups ─────────────────────────── */
+.activity-time-group {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  padding: 12px 0 6px;
+  margin-top: 4px;
+  border-top: 1px solid var(--bg-surface);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.activity-time-group:first-of-type {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 4px;
+}
+.activity-time-group-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.activity-time-group-dot.live {
+  background: var(--green);
+  animation: connPulse 2s ease-in-out infinite;
 }
 
 /* ── Animations ────────────────────────────────────── */
