@@ -1,5 +1,5 @@
 import { state, getTotalCost, getTotalTokens } from './state';
-import { formatTokens, formatDuration, stringToColor } from './utils';
+import { formatTokens, formatDuration, stringToColor, sparkline } from './utils';
 import { openGoalDetail } from './detail-panels';
 
 // Model-aware pricing (per 1M tokens) — mirrors ENGINE MODEL_PRICING
@@ -84,7 +84,10 @@ export function renderCosts(): void {
       <!-- Hero metrics row -->
       <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;">
         <div class="settings-card" style="margin-bottom: 0; padding: 16px 18px;">
-          <div style="font-size: 28px; font-weight: 700; letter-spacing: -1px;">$${totalCost.toFixed(2)}</div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="font-size: 28px; font-weight: 700; letter-spacing: -1px;">$${totalCost.toFixed(2)}</div>
+            ${sparkline(hourlySpend, 48, 20)}
+          </div>
           <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">Total spend</div>
         </div>
         <div class="settings-card" style="margin-bottom: 0; padding: 16px 18px;">
@@ -96,7 +99,16 @@ export function renderCosts(): void {
           <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">Per hour</div>
         </div>
         <div class="settings-card" style="margin-bottom: 0; padding: 16px 18px;">
-          <div style="font-size: 28px; font-weight: 700; letter-spacing: -1px;">${state.goals.length}</div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="font-size: 28px; font-weight: 700; letter-spacing: -1px;">${state.goals.length}</div>
+            ${sparkline(
+              [state.goals.filter(g => g.status === "complete").length,
+               state.goals.filter(g => g.status === "active").length,
+               state.goals.filter(g => g.status === "blocked").length,
+               state.goals.filter(g => g.status === "failed").length],
+              40, 20, "var(--blue)"
+            )}
+          </div>
           <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">Goals</div>
         </div>
       </div>

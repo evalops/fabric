@@ -2,6 +2,8 @@ import { state, callbacks } from './state';
 import { showToast } from './toasts';
 import { renderAllWork, renderActivity, renderNeedsYou } from './views';
 import { renderCosts } from './view-costs';
+import { renderGraph } from './view-graph';
+import { renderAgents } from './view-agents';
 
 export function handleFabricEvent(event: any): void {
   switch (event.type) {
@@ -9,6 +11,7 @@ export function handleFabricEvent(event: any): void {
       callbacks.renderSidebarGoals();
       callbacks.renderTitleStatus();
       if (state.currentView === "all-work") renderAllWork();
+      if (state.currentView === "graph") renderGraph();
       break;
     }
     case "goal-updated": {
@@ -32,11 +35,14 @@ export function handleFabricEvent(event: any): void {
       callbacks.renderSidebarGoals();
       callbacks.renderTitleStatus();
       if (state.currentView === "all-work") renderAllWork();
+      if (state.currentView === "graph") renderGraph();
+      if (state.currentView === "agents") renderAgents();
       break;
     }
     case "step-updated": {
       callbacks.renderSidebarGoals();
       if (state.currentView === "all-work") renderAllWork();
+      if (state.currentView === "graph") renderGraph();
       break;
     }
     case "activity": {
@@ -97,6 +103,10 @@ export function handleFabricEvent(event: any): void {
         text: `<strong>summary</strong> ${event.data.outcome}: ${event.data.turnCount} turns, ${event.data.toolCallCount} tool calls, $${event.data.totalCost?.toFixed(2)} cost, ${Math.round((event.data.durationMs || 0) / 1000)}s duration`,
       });
       if (state.currentView === "activity") renderActivity();
+      if (state.currentView === "all-work") renderAllWork();
+      if (state.currentView === "costs") renderCosts();
+      if (state.currentView === "graph") renderGraph();
+      callbacks.renderSidebarGoals();
       callbacks.renderTitleStatus();
       break;
     }

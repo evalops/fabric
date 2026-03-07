@@ -26,3 +26,16 @@ export function stringToColor(str: string): string {
   for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
   return colors[Math.abs(hash) % colors.length];
 }
+
+/** Generate an inline SVG sparkline from an array of values */
+export function sparkline(values: number[], width = 60, height = 16, color = "var(--accent)"): string {
+  if (values.length < 2) return "";
+  const max = Math.max(...values, 0.01);
+  const min = Math.min(...values, 0);
+  const range = max - min || 1;
+  const step = width / (values.length - 1);
+  const points = values.map((v, i) => `${i * step},${height - ((v - min) / range) * (height - 2) - 1}`).join(" ");
+  return `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" style="vertical-align: middle; overflow: visible;">
+    <polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+  </svg>`;
+}
