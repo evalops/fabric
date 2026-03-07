@@ -1050,6 +1050,205 @@ body.dark .detail-overlay::before { background: rgba(0,0,0,0.4); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-lit); }
 
+/* ── Settings View ─────────────────────────────────── */
+.settings-view {
+  max-width: 640px;
+}
+
+.settings-card {
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  margin-bottom: 16px;
+  transition: border-color 0.15s, background 0.2s;
+}
+
+.settings-card-header {
+  margin-bottom: 16px;
+}
+.settings-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+  margin-bottom: 4px;
+}
+.settings-card-desc {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-top: 1px solid var(--bg-surface);
+  gap: 16px;
+}
+.settings-row:first-of-type {
+  border-top: none;
+}
+
+.settings-row-info {
+  flex: 1;
+  min-width: 0;
+}
+.settings-row-label {
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+.settings-row-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.settings-input {
+  width: 240px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.12s;
+}
+.settings-input:focus {
+  border-color: var(--accent);
+}
+.settings-input::placeholder {
+  color: var(--text-muted);
+}
+.settings-input.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.settings-select {
+  width: 240px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%239298a8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 32px;
+  transition: border-color 0.12s;
+}
+.settings-select:focus {
+  border-color: var(--accent);
+}
+
+/* Toggle switch */
+.settings-switch {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+}
+.settings-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.settings-switch-track {
+  position: absolute;
+  inset: 0;
+  background: var(--border-lit);
+  border-radius: 11px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.settings-switch-track::after {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: white;
+  top: 3px;
+  left: 3px;
+  transition: transform 0.2s;
+}
+.settings-switch input:checked + .settings-switch-track {
+  background: var(--accent);
+}
+.settings-switch input:checked + .settings-switch-track::after {
+  transform: translateX(18px);
+}
+
+/* Theme radio group */
+.settings-theme-group {
+  display: flex;
+  gap: 8px;
+}
+.settings-theme-option {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.12s;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+}
+.settings-theme-option:hover {
+  border-color: var(--border-lit);
+  color: var(--text-primary);
+}
+.settings-theme-option.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/* Number input */
+.settings-number {
+  width: 100px;
+  text-align: right;
+}
+
+.settings-reset {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  background: none;
+  border: none;
+  font-family: var(--font-sans);
+  padding: 4px 0;
+  transition: color 0.12s;
+}
+.settings-reset:hover {
+  color: var(--red);
+}
+
+.settings-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--green);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.settings-saved.show {
+  opacity: 1;
+}
+
 /* ── Empty state ───────────────────────────────────── */
 .empty-state {
   text-align: center;

@@ -35,10 +35,15 @@ export interface FabricGoal {
   steps: FabricStep[];
   timeline: { time: number; text: string }[];
   sessionId?: string;
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  startedAt: number;
+  completedAt?: number;
 }
 
 export interface FabricEvent {
-  type: "goal-created" | "goal-updated" | "step-updated" | "activity" | "attention" | "toast" | "agent-message";
+  type: "goal-created" | "goal-updated" | "step-updated" | "activity" | "attention" | "toast" | "agent-message" | "cost-update";
   goalId?: string;
   data: any;
 }
@@ -113,6 +118,9 @@ export class FabricEngine extends EventEmitter {
   private goals: Map<string, FabricGoal> = new Map();
   private goalCounter = 0;
   private abortControllers: Map<string, AbortController> = new Map();
+  private defaultBudget = 2.00;
+  private defaultMaxTurns = 30;
+  private defaultModel: "sonnet" | "opus" | "haiku" | "inherit" = "sonnet";
 
   constructor() {
     super();
@@ -144,6 +152,10 @@ export class FabricEngine extends EventEmitter {
       timeline: [
         { time: Date.now(), text: `Goal created by <strong>you</strong>: "${title}"` },
       ],
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      startedAt: Date.now(),
     };
 
     this.goals.set(id, goal);
@@ -191,19 +203,19 @@ export class FabricEngine extends EventEmitter {
           description: "Research agent for gathering information and analyzing code",
           prompt: "You are a research agent. Analyze code, search for information, and report findings. Be thorough but concise.",
           tools: ["Read", "Grep", "Glob", "WebSearch"],
-          model: "sonnet",
+          model: this.defaultModel,
         },
         "implementer": {
           description: "Implementation agent for writing and modifying code",
           prompt: "You are an implementation agent. Write clean, well-structured code. Follow existing patterns in the codebase.",
           tools: ["Read", "Edit", "Write", "Bash", "Grep", "Glob"],
-          model: "sonnet",
+          model: this.defaultModel,
         },
         "reviewer": {
           description: "Code review agent for checking quality and correctness",
           prompt: "You are a code review agent. Check for bugs, security issues, and style problems. Be specific in your feedback.",
           tools: ["Read", "Grep", "Glob"],
-          model: "sonnet",
+          model: this.defaultModel,
         },
       },
       tools: ["Read", "Grep", "Glob", "Bash", "Edit", "Write", "Agent",
@@ -215,8 +227,8 @@ export class FabricEngine extends EventEmitter {
         "Agent",
       ],
       permissionMode: "default",
-      maxTurns: 30,
-      maxBudgetUsd: 2.00,
+      maxTurns: this.defaultMaxTurns,
+      maxBudgetUsd: this.defaultBudget,
       effort: "medium",
       persistSession: true,
       hooks: {
@@ -305,6 +317,15 @@ Work in the current directory. Be efficient and focused.`;
               });
             }
           }
+        }
+        // Track token usage and costs
+        const usage = (assistantMsg.message as any).usage;
+        if (usage) {
+          goal.inputTokens += usage.input_tokens || 0;
+          goal.outputTokens += usage.output_tokens || 0;
+          // Approximate pricing (Sonnet: $3/$15 per 1M tokens)
+          goal.costUsd = (goal.inputTokens / 1_000_000) * 3 + (goal.outputTokens / 1_000_000) * 15;
+          this.emitEvent({ type: "cost-update", goalId, data: { costUsd: goal.costUsd, inputTokens: goal.inputTokens, outputTokens: goal.outputTokens } });
         }
         // Store session ID
         if (assistantMsg.session_id) {
@@ -432,6 +453,7 @@ Work in the current directory. Be efficient and focused.`;
     goal.status = "complete";
     goal.progress = 100;
     goal.summary = summary;
+    goal.completedAt = Date.now();
     goal.steps.forEach(s => { if (s.state !== "done") s.state = "done"; });
     goal.timeline.push({ time: Date.now(), text: `<strong>orchestrator</strong> completed goal: ${summary}` });
 
@@ -445,6 +467,22 @@ Work in the current directory. Be efficient and focused.`;
       goalId,
       data: { time: Date.now(), text: `<strong>orchestrator</strong> completed "${goal.title}"` },
     });
+  }
+
+  /**
+   * Update engine configuration from the renderer settings panel.
+   */
+  updateSettings(settings: { apiKey?: string; model?: string; maxBudgetUsd?: number; maxTurns?: number }): void {
+    if (settings.maxBudgetUsd !== undefined) this.defaultBudget = settings.maxBudgetUsd;
+    if (settings.maxTurns !== undefined) this.defaultMaxTurns = settings.maxTurns;
+    if (settings.model !== undefined) {
+      const modelMap: Record<string, typeof this.defaultModel> = {
+        "claude-opus-4-6": "opus",
+        "claude-sonnet-4-6": "sonnet",
+        "claude-haiku-4-5-20251001": "haiku",
+      };
+      this.defaultModel = modelMap[settings.model] ?? "sonnet" as const;
+    }
   }
 
   /**

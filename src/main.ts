@@ -53,6 +53,13 @@ ipcMain.handle("fabric:pause-goal", async (_event, goalId: string) => {
   return { success: true };
 });
 
+// Update engine settings from renderer
+ipcMain.handle("fabric:update-settings", async (_event, settings: { apiKey?: string; model?: string; maxBudgetUsd?: number; maxTurns?: number }) => {
+  if (settings.apiKey !== undefined) process.env.ANTHROPIC_API_KEY = settings.apiKey;
+  engine.updateSettings(settings);
+  return { success: true };
+});
+
 // ── Forward engine events to renderer ─────────────────
 
 engine.on("fabric-event", (event: FabricEvent) => {

@@ -24,4 +24,8 @@ contextBridge.exposeInMainWorld("fabric", {
     // Return cleanup function
     return () => ipcRenderer.removeListener("fabric:event", handler);
   },
+
+  // Update engine settings
+  updateSettings: (settings: { apiKey?: string; model?: string; maxBudgetUsd?: number; maxTurns?: number }) =>
+    ipcRenderer.invoke("fabric:update-settings", settings),
 });

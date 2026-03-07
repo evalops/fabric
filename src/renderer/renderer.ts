@@ -1,22 +1,15 @@
 // ── Fabric Bridge (IPC to main process) ───────────────
 
-export {}; // Make this a module so declare global works
-
 interface FabricBridge {
   createGoal(description: string): Promise<{ success: boolean; goalId?: string; error?: string }>;
   getGoals(): Promise<any[]>;
   getGoal(goalId: string): Promise<any>;
   pauseGoal(goalId: string): Promise<{ success: boolean }>;
   onEvent(callback: (event: any) => void): () => void;
+  updateSettings(settings: { apiKey?: string; model?: string; maxBudgetUsd?: number; maxTurns?: number }): Promise<{ success: boolean }>;
 }
 
-declare global {
-  interface Window {
-    fabric?: FabricBridge;
-  }
-}
-
-const bridge = window.fabric;
+const bridge = (window as any).fabric as FabricBridge | undefined;
 
 // ── Types ─────────────────────────────────────────────
 
@@ -40,6 +33,11 @@ interface Goal {
   agentCount: number;
   steps: Step[];
   timeline: { time: number; text: string }[];
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  startedAt: number;
+  completedAt?: number;
 }
 
 interface Agent {
@@ -78,6 +76,20 @@ function relativeTime(ts: number): string {
   if (diff < 60) return `${diff}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   return `${Math.floor(diff / 3600)}h ago`;
+}
+
+function formatTokens(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(0)}K`;
+  return String(tokens);
+}
+
+function formatDuration(startedAt: number, completedAt?: number): string {
+  const end = completedAt || Date.now();
+  const secs = Math.floor((end - startedAt) / 1000);
+  if (secs < 60) return `${secs}s`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
 }
 
 // ── Mock Data ─────────────────────────────────────────
@@ -232,6 +244,7 @@ const goals: Goal[] = [
     title: "Deploy v2.3 to production",
     summary: "Running canary at 5% traffic. Error rate looks healthy so far.",
     status: "active", progress: 68, agentCount: 3,
+    costUsd: 3.42, inputTokens: 284_000, outputTokens: 91_200, startedAt: NOW - 14 * MIN,
     steps: [
       { name: "Validate build artifacts", state: "done", agent: "build-validator", detail: "All checks passed", time: NOW - 12 * MIN },
       { name: "Run integration tests", state: "done", agent: "test-runner", detail: "312 passed", time: NOW - 8 * MIN },
@@ -252,6 +265,7 @@ const goals: Goal[] = [
     title: "Investigate billing anomaly",
     summary: "Found 3 suspicious patterns in Q1 transaction data. Narrowing down.",
     status: "active", progress: 35, agentCount: 2,
+    costUsd: 1.87, inputTokens: 156_000, outputTokens: 48_300, startedAt: NOW - 20 * MIN,
     steps: [
       { name: "Query transaction logs", state: "done", agent: "data-analyst", detail: "142K rows", time: NOW - 6 * MIN },
       { name: "Identify anomalous patterns", state: "running", agent: "anomaly-detector", detail: "3 clusters found", time: NOW - 4 * MIN },
@@ -269,6 +283,7 @@ const goals: Goal[] = [
     title: "Refactor auth for OAuth 2.1",
     summary: "Blocked on auth-sdk v4 dependency. Migration plan is ready.",
     status: "blocked", progress: 22, agentCount: 1,
+    costUsd: 4.65, inputTokens: 412_000, outputTokens: 78_500, startedAt: NOW - 35 * MIN,
     steps: [
       { name: "Audit current OAuth 2.0 code", state: "done", agent: "code-reviewer", detail: "14 issues", time: NOW - 30 * MIN },
       { name: "Draft migration plan", state: "done", agent: "architect", detail: "Approved", time: NOW - 20 * MIN },
@@ -288,6 +303,7 @@ const goals: Goal[] = [
     title: "API latency under 200ms (P95)",
     summary: "Load testing at 2x peak. Current P95 is 187ms \u2014 looking good.",
     status: "active", progress: 81, agentCount: 4,
+    costUsd: 6.80, inputTokens: 520_000, outputTokens: 185_000, startedAt: NOW - 50 * MIN,
     steps: [
       { name: "Profile top endpoints", state: "done", agent: "profiler", detail: "Bottlenecks found", time: NOW - 45 * MIN },
       { name: "Optimize slow queries", state: "done", agent: "db-optimizer", detail: "3 queries fixed", time: NOW - 25 * MIN },
@@ -308,6 +324,7 @@ const goals: Goal[] = [
     title: "Dependency security audit",
     summary: "Complete. 2 critical CVEs patched, 14 packages updated.",
     status: "complete", progress: 100, agentCount: 0,
+    costUsd: 2.14, inputTokens: 198_000, outputTokens: 42_000, startedAt: NOW - 65 * MIN, completedAt: NOW - 38 * MIN,
     steps: [
       { name: "Scan 847 packages", state: "done", agent: "security-scanner", time: NOW - 60 * MIN },
       { name: "Triage CVEs", state: "done", agent: "vuln-analyst", detail: "2 critical, 5 high", time: NOW - 55 * MIN },
@@ -361,12 +378,276 @@ const activityLog: ActivityEvent[] = [
   { time: NOW - 300_000, text: "<strong>security-scanner</strong> finished scanning 847 packages" },
 ];
 
+// ── Settings ──────────────────────────────────────────
+
+interface FabricSettings {
+  apiKey: string;
+  model: string;
+  theme: "light" | "dark" | "system";
+  maxBudgetUsd: number;
+  maxTurns: number;
+  toastNotifications: boolean;
+  soundNotifications: boolean;
+  showAgentMessages: boolean;
+}
+
+const SETTINGS_KEY = "fabric:settings:v1";
+
+const DEFAULT_SETTINGS: FabricSettings = {
+  apiKey: "",
+  model: "claude-sonnet-4-6",
+  theme: "light",
+  maxBudgetUsd: 2.00,
+  maxTurns: 30,
+  toastNotifications: true,
+  soundNotifications: false,
+  showAgentMessages: true,
+};
+
+function loadSettings(): FabricSettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch {}
+  return { ...DEFAULT_SETTINGS };
+}
+
+function saveSettings(settings: FabricSettings): void {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  applyTheme(settings.theme);
+  if (bridge) {
+    bridge.updateSettings({
+      apiKey: settings.apiKey,
+      model: settings.model,
+      maxBudgetUsd: settings.maxBudgetUsd,
+      maxTurns: settings.maxTurns,
+    });
+  }
+}
+
+let settings = loadSettings();
+
+function applyTheme(theme: FabricSettings["theme"]): void {
+  let shouldBeDark = false;
+  if (theme === "dark") shouldBeDark = true;
+  else if (theme === "system") shouldBeDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  darkMode = shouldBeDark;
+  document.body.classList.toggle("dark", shouldBeDark);
+  const btn = document.getElementById("dark-mode-toggle");
+  if (btn) btn.textContent = shouldBeDark ? "\u2600" : "\u263e";
+}
+
+function showSettingsSaved(): void {
+  const el = document.querySelector(".settings-saved");
+  if (!el) return;
+  el.classList.add("show");
+  setTimeout(() => el.classList.remove("show"), 1500);
+}
+
+function renderSettings(): void {
+  const feed = document.getElementById("feed")!;
+  const masked = settings.apiKey ? "\u2022".repeat(8) + settings.apiKey.slice(-4) : "";
+
+  feed.innerHTML = `<div class="settings-view">
+    <!-- Appearance -->
+    <div class="settings-card">
+      <div class="settings-card-header">
+        <div class="settings-card-title">Appearance</div>
+        <div class="settings-card-desc">Control the look and feel of Fabric</div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">Theme</div>
+          <div class="settings-row-hint">Choose between light, dark, or follow your system preference</div>
+        </div>
+        <div class="settings-theme-group">
+          <div class="settings-theme-option${settings.theme === "light" ? " active" : ""}" data-theme="light">Light</div>
+          <div class="settings-theme-option${settings.theme === "dark" ? " active" : ""}" data-theme="dark">Dark</div>
+          <div class="settings-theme-option${settings.theme === "system" ? " active" : ""}" data-theme="system">System</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- API Configuration -->
+    <div class="settings-card">
+      <div class="settings-card-header">
+        <div class="settings-card-title">API Configuration</div>
+        <div class="settings-card-desc">Configure your Anthropic API key for agent execution</div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">API Key</div>
+          <div class="settings-row-hint">Your Anthropic API key. Stored locally, never sent anywhere except the Anthropic API.</div>
+        </div>
+        <input class="settings-input mono" id="settings-api-key" type="password" placeholder="sk-ant-..." value="${masked}" />
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">Model</div>
+          <div class="settings-row-hint">Default model used for orchestration and subagents</div>
+        </div>
+        <select class="settings-select" id="settings-model">
+          <option value="claude-opus-4-6"${settings.model === "claude-opus-4-6" ? " selected" : ""}>Claude Opus 4.6</option>
+          <option value="claude-sonnet-4-6"${settings.model === "claude-sonnet-4-6" ? " selected" : ""}>Claude Sonnet 4.6</option>
+          <option value="claude-haiku-4-5-20251001"${settings.model === "claude-haiku-4-5-20251001" ? " selected" : ""}>Claude Haiku 4.5</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Agent Defaults -->
+    <div class="settings-card">
+      <div class="settings-card-header">
+        <div class="settings-card-title">Agent Defaults</div>
+        <div class="settings-card-desc">Default limits applied to each new goal</div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">Budget per goal</div>
+          <div class="settings-row-hint">Maximum spend in USD before a goal is paused</div>
+        </div>
+        <input class="settings-input settings-number" id="settings-budget" type="number" min="0.50" max="50" step="0.50" value="${settings.maxBudgetUsd}" />
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">Max turns per goal</div>
+          <div class="settings-row-hint">Maximum agent conversation turns before stopping</div>
+        </div>
+        <input class="settings-input settings-number" id="settings-max-turns" type="number" min="5" max="100" step="5" value="${settings.maxTurns}" />
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">Show agent messages</div>
+          <div class="settings-row-hint">Display raw agent text in the activity feed</div>
+        </div>
+        <label class="settings-switch">
+          <input type="checkbox" id="settings-agent-messages" ${settings.showAgentMessages ? "checked" : ""} />
+          <span class="settings-switch-track"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Notifications -->
+    <div class="settings-card">
+      <div class="settings-card-header">
+        <div class="settings-card-title">Notifications</div>
+        <div class="settings-card-desc">Control how Fabric notifies you about events</div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">Toast notifications</div>
+          <div class="settings-row-hint">Show pop-up notifications for important events</div>
+        </div>
+        <label class="settings-switch">
+          <input type="checkbox" id="settings-toast" ${settings.toastNotifications ? "checked" : ""} />
+          <span class="settings-switch-track"></span>
+        </label>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-label">Sound notifications</div>
+          <div class="settings-row-hint">Play a sound when an agent needs your attention</div>
+        </div>
+        <label class="settings-switch">
+          <input type="checkbox" id="settings-sound" ${settings.soundNotifications ? "checked" : ""} />
+          <span class="settings-switch-track"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Reset -->
+    <div style="display: flex; align-items: center; justify-content: space-between;">
+      <button class="settings-reset" id="settings-reset">Reset all settings to defaults</button>
+      <span class="settings-saved">Saved</span>
+    </div>
+  </div>`;
+
+  // ── Wire up settings interactions ──
+
+  // Theme buttons
+  feed.querySelectorAll(".settings-theme-option").forEach(el => {
+    el.addEventListener("click", () => {
+      const theme = (el as HTMLElement).dataset.theme as FabricSettings["theme"];
+      settings.theme = theme;
+      saveSettings(settings);
+      feed.querySelectorAll(".settings-theme-option").forEach(o => o.classList.toggle("active", (o as HTMLElement).dataset.theme === theme));
+      showSettingsSaved();
+    });
+  });
+
+  // API key
+  const apiKeyInput = document.getElementById("settings-api-key") as HTMLInputElement;
+  let apiKeyFocused = false;
+  apiKeyInput.addEventListener("focus", () => {
+    if (!apiKeyFocused) {
+      apiKeyFocused = true;
+      apiKeyInput.type = "text";
+      apiKeyInput.value = settings.apiKey;
+    }
+  });
+  apiKeyInput.addEventListener("blur", () => {
+    apiKeyFocused = false;
+    settings.apiKey = apiKeyInput.value;
+    saveSettings(settings);
+    apiKeyInput.type = "password";
+    apiKeyInput.value = settings.apiKey ? "\u2022".repeat(8) + settings.apiKey.slice(-4) : "";
+    showSettingsSaved();
+  });
+
+  // Model select
+  (document.getElementById("settings-model") as HTMLSelectElement).addEventListener("change", (e) => {
+    settings.model = (e.target as HTMLSelectElement).value;
+    saveSettings(settings);
+    showSettingsSaved();
+  });
+
+  // Budget
+  (document.getElementById("settings-budget") as HTMLInputElement).addEventListener("change", (e) => {
+    settings.maxBudgetUsd = parseFloat((e.target as HTMLInputElement).value) || DEFAULT_SETTINGS.maxBudgetUsd;
+    saveSettings(settings);
+    showSettingsSaved();
+  });
+
+  // Max turns
+  (document.getElementById("settings-max-turns") as HTMLInputElement).addEventListener("change", (e) => {
+    settings.maxTurns = parseInt((e.target as HTMLInputElement).value) || DEFAULT_SETTINGS.maxTurns;
+    saveSettings(settings);
+    showSettingsSaved();
+  });
+
+  // Toggle switches
+  (document.getElementById("settings-agent-messages") as HTMLInputElement).addEventListener("change", (e) => {
+    settings.showAgentMessages = (e.target as HTMLInputElement).checked;
+    saveSettings(settings);
+    showSettingsSaved();
+  });
+  (document.getElementById("settings-toast") as HTMLInputElement).addEventListener("change", (e) => {
+    settings.toastNotifications = (e.target as HTMLInputElement).checked;
+    saveSettings(settings);
+    showSettingsSaved();
+  });
+  (document.getElementById("settings-sound") as HTMLInputElement).addEventListener("change", (e) => {
+    settings.soundNotifications = (e.target as HTMLInputElement).checked;
+    saveSettings(settings);
+    showSettingsSaved();
+  });
+
+  // Reset
+  document.getElementById("settings-reset")!.addEventListener("click", () => {
+    settings = { ...DEFAULT_SETTINGS };
+    saveSettings(settings);
+    renderSettings();
+    showSettingsSaved();
+  });
+}
+
 // ── Dark Mode ─────────────────────────────────────────
 
 let darkMode = false;
 
 function toggleDarkMode(): void {
   darkMode = !darkMode;
+  settings.theme = darkMode ? "dark" : "light";
+  saveSettings(settings);
   document.body.classList.toggle("dark", darkMode);
   const btn = document.getElementById("dark-mode-toggle");
   if (btn) btn.textContent = darkMode ? "\u2600" : "\u263e";
@@ -391,7 +672,6 @@ const simEvents = [
 ];
 
 let simIdx = 0;
-let spendAmount = 284;
 
 function simulateTick(): void {
   const ev = simEvents[simIdx % simEvents.length];
@@ -402,19 +682,22 @@ function simulateTick(): void {
 
   if (ev.toast) showToast(ev.toast.title, ev.toast.body, ev.toast.color);
 
-  spendAmount = Math.min(500, spendAmount + Math.random() * 1.5);
-  const footerSpend = document.getElementById("footer-spend");
-  if (footerSpend) footerSpend.textContent = `$${Math.round(spendAmount)} today`;
-
   goals.forEach(g => {
-    if (g.status === "active" && g.progress < 95) {
-      g.progress = Math.min(95, g.progress + Math.random() * 1.5);
+    if (g.status === "active") {
+      if (g.progress < 95) g.progress = Math.min(95, g.progress + Math.random() * 1.5);
+      g.costUsd += Math.random() * 0.15;
+      g.inputTokens += Math.floor(Math.random() * 8000);
+      g.outputTokens += Math.floor(Math.random() * 3000);
     }
   });
+
+  const footerSpend = document.getElementById("footer-spend");
+  if (footerSpend) footerSpend.textContent = `$${getTotalCost().toFixed(2)} today`;
 
   if (currentView === "activity") renderActivity();
   if (currentView === "agents") renderAgents();
   if (currentView === "graph") renderGraph();
+  if (currentView === "costs") renderCosts();
   renderSidebarGoals();
   renderTitleStatus();
 }
@@ -422,6 +705,7 @@ function simulateTick(): void {
 // ── Toasts ────────────────────────────────────────────
 
 function showToast(title: string, body: string, accentColor: string): void {
+  if (!settings.toastNotifications) return;
   const container = document.getElementById("toast-container")!;
   const toast = document.createElement("div");
   toast.className = "toast";
@@ -478,7 +762,7 @@ function getCmdkActions(query: string): { group: string; items: CmdkAction[] }[]
     commandActions.push({ icon: "\u21a9", text: "Rollback Deploy v2.3", hint: "command", action: () => { closeCmdk(); showToast("Rolling back", "Deploy v2.3 canary is being rolled back", "var(--red)"); activityLog.unshift({ time: Date.now(), text: "<strong>you</strong> triggered rollback on Deploy v2.3" }); } });
   }
   if (q.includes("budget") || q.includes("spend") || q.includes("cost")) {
-    commandActions.push({ icon: "$", text: `Today's spend: $${Math.round(spendAmount)} / $500`, hint: "info", action: () => closeCmdk() });
+    commandActions.push({ icon: "$", text: `Today's spend: $${getTotalCost().toFixed(2)}`, hint: "info", action: () => { closeCmdk(); switchView("costs"); } });
   }
   if (q.includes("dark") || q.includes("light") || q.includes("theme") || q.includes("mode")) {
     commandActions.push({ icon: darkMode ? "\u2600" : "\u263e", text: `Switch to ${darkMode ? "light" : "dark"} mode`, hint: "theme", action: () => { closeCmdk(); toggleDarkMode(); } });
@@ -505,6 +789,8 @@ function getCmdkActions(query: string): { group: string; items: CmdkAction[] }[]
     { icon: "\u22ee", text: "Activity", hint: "view", action: () => { closeCmdk(); switchView("activity"); } },
     { icon: "\u2726", text: "Agents", hint: "view", action: () => { closeCmdk(); switchView("agents"); } },
     { icon: "\u25ce", text: "Graph", hint: "view", action: () => { closeCmdk(); switchView("graph"); } },
+    { icon: "$", text: "Costs", hint: "view", action: () => { closeCmdk(); switchView("costs"); } },
+    { icon: "\u2699", text: "Settings", hint: "view", action: () => { closeCmdk(); switchView("settings"); } },
   ].filter(a => a.text.toLowerCase().includes(q) || q === "");
 
   const groups: { group: string; items: CmdkAction[] }[] = [];
@@ -580,7 +866,7 @@ function getSmartResponse(query: string): string {
     const active = goals.filter(g => g.status === "active").length;
     const blocked = goals.filter(g => g.status === "blocked").length;
     const working = agents.filter(a => a.status === "working").length;
-    return `<strong>${active} goals active</strong>, ${blocked} blocked. ${working} agents working, ${agents.length - working} idle. Spend today: <strong>$${Math.round(spendAmount)}</strong> / $500. ${attentionItems.length} items need your attention.`;
+    return `<strong>${active} goals active</strong>, ${blocked} blocked. ${working} agents working, ${agents.length - working} idle. Spend today: <strong>$${getTotalCost().toFixed(2)}</strong>. ${attentionItems.length} items need your attention.`;
   }
   return `Try: <strong>"status"</strong> for an overview, a goal name, <strong>"create: [description]"</strong> to start a new goal, <strong>"rollback"</strong> or <strong>"pause"</strong> for commands, or <strong>"dark mode"</strong>.`;
 }
@@ -621,6 +907,7 @@ async function createGoalFromNL(description: string): Promise<void> {
       agentCount: 0,
       steps: [],
       timeline: [{ time: Date.now(), text: `Goal created by <strong>you</strong>` }],
+      costUsd: 0, inputTokens: 0, outputTokens: 0, startedAt: Date.now(),
     };
     goals.unshift(placeholder);
     activityLog.unshift({ time: Date.now(), text: `<strong>you</strong> created goal: "${title}"` });
@@ -647,6 +934,7 @@ async function createGoalFromNL(description: string): Promise<void> {
         { time: Date.now(), text: "Goal created by <strong>you</strong>" },
         { time: Date.now(), text: "<strong>architect</strong> began analyzing requirements" },
       ],
+      costUsd: 0, inputTokens: 0, outputTokens: 0, startedAt: Date.now(),
     };
 
     goals.unshift(newGoal);
@@ -802,6 +1090,18 @@ function openGoalDetail(goalId: string): void {
         <span class="detail-meta-label">Steps</span>
         <span class="detail-meta-value">${goal.steps.filter(s => s.state === "done").length}/${goal.steps.length}</span>
       </div>
+      <div class="detail-meta-item">
+        <span class="detail-meta-label">Cost</span>
+        <span class="detail-meta-value">$${goal.costUsd.toFixed(2)}</span>
+      </div>
+      <div class="detail-meta-item">
+        <span class="detail-meta-label">Tokens</span>
+        <span class="detail-meta-value">${formatTokens(goal.inputTokens + goal.outputTokens)}</span>
+      </div>
+      <div class="detail-meta-item">
+        <span class="detail-meta-label">Duration</span>
+        <span class="detail-meta-value">${formatDuration(goal.startedAt, goal.completedAt)}</span>
+      </div>
     </div>
 
     ${uniqueAgents.length > 0 ? `
@@ -904,12 +1204,11 @@ function renderGraph(): void {
 
     const goalAgentNames = [...new Set(goal.steps.filter(s => s.agent && (s.state === "running" || s.state === "warn")).map(s => s.agent!))];
 
-    goalAgentNames.forEach((aName, ai) => {
+    goalAgentNames.forEach((aName) => {
       const existingNode = nodes.find(n => n.id === `agent-${aName}`);
       if (existingNode) {
         edges.push({ from: goal.id, to: existingNode.id });
       } else {
-        const agent = agents.find(a => a.name === aName);
         const agentNode: GNode = {
           id: `agent-${aName}`, label: aName, type: "agent",
           col: 1, row: nodes.filter(n => n.col === 1).length,
@@ -1035,6 +1334,114 @@ function renderAgentCard(a: Agent): string {
   `;
 }
 
+// ── Costs View ────────────────────────────────────────
+
+function getTotalCost(): number {
+  return goals.reduce((sum, g) => sum + g.costUsd, 0);
+}
+
+function getTotalTokens(): { input: number; output: number } {
+  return goals.reduce((acc, g) => ({
+    input: acc.input + g.inputTokens,
+    output: acc.output + g.outputTokens,
+  }), { input: 0, output: 0 });
+}
+
+function renderCosts(): void {
+  const feed = document.getElementById("feed")!;
+  const totalCost = getTotalCost();
+  const tokens = getTotalTokens();
+  const totalTokens = tokens.input + tokens.output;
+  const activeGoals = goals.filter(g => g.status === "active");
+  const completedGoals = goals.filter(g => g.status === "complete");
+
+  // Sort goals by cost descending
+  const sortedGoals = [...goals].sort((a, b) => b.costUsd - a.costUsd);
+  const maxCost = sortedGoals[0]?.costUsd || 1;
+
+  feed.innerHTML = `
+    <div class="settings-view">
+      <!-- Summary cards -->
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px;">
+        <div class="settings-card" style="margin-bottom: 0;">
+          <div style="font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">$${totalCost.toFixed(2)}</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">Total spend</div>
+        </div>
+        <div class="settings-card" style="margin-bottom: 0;">
+          <div style="font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">${formatTokens(totalTokens)}</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">Total tokens</div>
+        </div>
+        <div class="settings-card" style="margin-bottom: 0;">
+          <div style="font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">${goals.length > 0 ? "$" + (totalCost / goals.length).toFixed(2) : "$0.00"}</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">Avg per goal</div>
+        </div>
+      </div>
+
+      <!-- Token breakdown -->
+      <div class="settings-card">
+        <div class="settings-card-header">
+          <div class="settings-card-title">Token usage</div>
+          <div class="settings-card-desc">${formatTokens(tokens.input)} input, ${formatTokens(tokens.output)} output</div>
+        </div>
+        <div style="display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--bg-surface);">
+          <div style="width: ${totalTokens > 0 ? (tokens.input / totalTokens) * 100 : 50}%; background: var(--blue); transition: width 0.3s;"></div>
+          <div style="width: ${totalTokens > 0 ? (tokens.output / totalTokens) * 100 : 50}%; background: var(--accent); transition: width 0.3s;"></div>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 12px; color: var(--text-muted);">
+          <span><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--blue); margin-right: 4px;"></span>Input (~$${((tokens.input / 1_000_000) * 3).toFixed(2)})</span>
+          <span><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 4px;"></span>Output (~$${((tokens.output / 1_000_000) * 15).toFixed(2)})</span>
+        </div>
+      </div>
+
+      <!-- Per-goal breakdown -->
+      <div class="settings-card">
+        <div class="settings-card-header">
+          <div class="settings-card-title">Cost by goal</div>
+          <div class="settings-card-desc">${activeGoals.length} active, ${completedGoals.length} completed</div>
+        </div>
+        ${sortedGoals.map(g => `
+          <div class="cost-goal-row" data-goal="${g.id}" style="padding: 10px 0; border-top: 1px solid var(--bg-surface); cursor: pointer;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <div class="goal-indicator ind-${g.status}" style="margin-top: 0;"></div>
+                <span style="font-size: 13px; font-weight: 500;">${g.title}</span>
+              </div>
+              <span style="font-family: var(--font-mono); font-size: 13px; font-weight: 600;">$${g.costUsd.toFixed(2)}</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <div style="flex: 1; height: 4px; background: var(--bg-surface); border-radius: 2px; overflow: hidden;">
+                <div style="width: ${(g.costUsd / maxCost) * 100}%; height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.3s;"></div>
+              </div>
+              <span style="font-size: 11px; color: var(--text-muted); flex-shrink: 0; width: 50px; text-align: right;">${formatTokens(g.inputTokens + g.outputTokens)} tok</span>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+
+      <!-- Budget -->
+      <div class="settings-card">
+        <div class="settings-card-header">
+          <div class="settings-card-title">Budget</div>
+          <div class="settings-card-desc">Per-goal limit: $${settings.maxBudgetUsd.toFixed(2)}</div>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 8px;">
+          <span>Effective limit for ${goals.length} goals</span>
+          <span style="font-weight: 600;">$${(settings.maxBudgetUsd * goals.length).toFixed(2)}</span>
+        </div>
+        <div style="height: 8px; background: var(--bg-surface); border-radius: 4px; overflow: hidden;">
+          <div style="width: ${Math.min(100, (totalCost / (settings.maxBudgetUsd * goals.length)) * 100)}%; height: 100%; background: ${totalCost > settings.maxBudgetUsd * goals.length * 0.8 ? "var(--amber)" : "var(--green)"}; border-radius: 4px; transition: width 0.3s;"></div>
+        </div>
+        <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">${Math.round((totalCost / (settings.maxBudgetUsd * goals.length)) * 100)}% of total budget used</div>
+      </div>
+    </div>
+  `;
+
+  // Goal row clicks
+  feed.querySelectorAll(".cost-goal-row").forEach(el => {
+    el.addEventListener("click", () => openGoalDetail((el as HTMLElement).dataset.goal!));
+  });
+}
+
 // ── Rendering ─────────────────────────────────────────
 
 let currentView = "needs-you";
@@ -1045,12 +1452,12 @@ function renderTitleStatus(): void {
   const active = goals.filter(g => g.status === "active").length;
   const blocked = goals.filter(g => g.status === "blocked").length;
   const working = agents.filter(a => a.status === "working").length;
+  const totalCost = getTotalCost();
   const parts: string[] = [];
   if (active) parts.push(`${active} active`);
   if (blocked) parts.push(`${blocked} blocked`);
   parts.push(`${working} agents working`);
-  parts.push(`$${Math.round(spendAmount)} spent`);
-  el.textContent = parts.join(" \u00b7 ");
+  parts.push(`$${totalCost.toFixed(2)} spent`);
 }
 
 function renderSidebarGoals(): void {
@@ -1147,6 +1554,7 @@ function renderAllWork(): void {
         <span class="goal-tag">${goal.status}</span>
         <span class="goal-tag">${goal.agentCount} agent${goal.agentCount !== 1 ? "s" : ""}</span>
         <span class="goal-tag">${goal.steps.filter(s => s.state === "done").length}/${goal.steps.length} steps</span>
+        <span class="goal-tag">$${goal.costUsd.toFixed(2)}</span>
       </div>
     </div>
   `).join("");
@@ -1174,6 +1582,8 @@ const viewConfig: Record<string, { title: string; subtitle: string; render: () =
   "activity": { title: "Activity", subtitle: "Live stream of what agents are doing", render: renderActivity },
   "agents": { title: "Agents", subtitle: `${agents.length} agents in the mesh`, render: renderAgents },
   "graph": { title: "Graph", subtitle: "How goals and agents connect", render: renderGraph },
+  "costs": { title: "Costs", subtitle: "Spend, tokens, and budget tracking", render: renderCosts },
+  "settings": { title: "Settings", subtitle: "Configure Fabric preferences and API keys", render: renderSettings },
 };
 
 function switchView(view: string): void {
@@ -1193,6 +1603,9 @@ function switchView(view: string): void {
 // ── Init ──────────────────────────────────────────────
 
 function init(): void {
+  // Apply saved theme on startup
+  applyTheme(settings.theme);
+
   renderTitleStatus();
   renderSidebarGoals();
   renderNeedsYou();
@@ -1313,12 +1726,23 @@ function handleFabricEvent(event: any): void {
       break;
     }
     case "agent-message": {
-      // Could show in a dedicated panel — for now, add to activity
+      if (!settings.showAgentMessages) break;
       activityLog.unshift({
         time: Date.now(),
         text: `<strong>orchestrator</strong> ${event.data.text.slice(0, 120)}${event.data.text.length > 120 ? "..." : ""}`,
       });
       if (currentView === "activity") renderActivity();
+      break;
+    }
+    case "cost-update": {
+      const costGoal = goals.find(g => g.id === event.goalId);
+      if (costGoal) {
+        costGoal.costUsd = event.data.costUsd;
+        costGoal.inputTokens = event.data.inputTokens;
+        costGoal.outputTokens = event.data.outputTokens;
+      }
+      if (currentView === "costs") renderCosts();
+      renderTitleStatus();
       break;
     }
     case "attention": {
