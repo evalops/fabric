@@ -1,3 +1,23 @@
+// ── Fabric Bridge (IPC to main process) ───────────────
+
+export {}; // Make this a module so declare global works
+
+interface FabricBridge {
+  createGoal(description: string): Promise<{ success: boolean; goalId?: string; error?: string }>;
+  getGoals(): Promise<any[]>;
+  getGoal(goalId: string): Promise<any>;
+  pauseGoal(goalId: string): Promise<{ success: boolean }>;
+  onEvent(callback: (event: any) => void): () => void;
+}
+
+declare global {
+  interface Window {
+    fabric?: FabricBridge;
+  }
+}
+
+const bridge = window.fabric;
+
 // ── Types ─────────────────────────────────────────────
 
 type GoalStatus = "active" | "complete" | "blocked" | "failed";
@@ -581,66 +601,90 @@ function closeCmdk(): void {
 
 // ── Goal Creation (Natural Language) ──────────────────
 
-function createGoalFromNL(description: string): void {
-  // Simulate the AI decomposing the goal
-  const newId = `g${goals.length + 1}`;
-  const newGoal: Goal = {
-    id: newId,
-    title: description.charAt(0).toUpperCase() + description.slice(1),
-    summary: "Just created. Agents are analyzing and planning steps...",
-    status: "active",
-    progress: 0,
-    agentCount: 0,
-    steps: [
-      { name: "Analyze requirements", state: "running", agent: "architect", time: Date.now() },
-      { name: "Plan execution steps", state: "waiting" },
-      { name: "Execute plan", state: "waiting" },
-      { name: "Validate results", state: "waiting" },
-    ],
-    timeline: [
-      { time: Date.now(), text: "Goal created by <strong>you</strong>" },
-      { time: Date.now(), text: "<strong>architect</strong> began analyzing requirements" },
-    ],
-  };
-
-  goals.unshift(newGoal);
-  activityLog.unshift({ time: Date.now(), text: `<strong>you</strong> created goal: "${newGoal.title}"` });
-
-  showToast("Goal created", `"${newGoal.title}" \u2014 agents are picking it up`, "var(--accent)");
-
-  // Simulate agent pickup after 3s
-  setTimeout(() => {
-    newGoal.agentCount = 1;
-    newGoal.progress = 8;
-    newGoal.summary = "Architect is analyzing requirements and planning steps.";
-    newGoal.timeline.push({ time: Date.now(), text: "<strong>architect</strong> identified 3 sub-tasks" });
-    activityLog.unshift({ time: Date.now(), text: `<strong>architect</strong> picked up "${newGoal.title}"` });
+async function createGoalFromNL(description: string): Promise<void> {
+  if (bridge) {
+    // ── REAL MODE: Use Claude Agent SDK via IPC ──
+    const result = await bridge.createGoal(description);
+    if (!result.success) {
+      showToast("Error", result.error || "Failed to create goal", "var(--red)");
+      return;
+    }
+    // The engine will send events via bridge.onEvent — the UI will update reactively.
+    // Create a placeholder in local state that will be updated by events.
+    const title = description.charAt(0).toUpperCase() + description.slice(1);
+    const placeholder: Goal = {
+      id: result.goalId!,
+      title,
+      summary: "Agents are analyzing and planning steps...",
+      status: "active",
+      progress: 0,
+      agentCount: 0,
+      steps: [],
+      timeline: [{ time: Date.now(), text: `Goal created by <strong>you</strong>` }],
+    };
+    goals.unshift(placeholder);
+    activityLog.unshift({ time: Date.now(), text: `<strong>you</strong> created goal: "${title}"` });
     renderSidebarGoals();
-    if (currentView === "all-work") renderAllWork();
-    if (currentView === "activity") renderActivity();
-    showToast("Agent assigned", `architect is now working on "${newGoal.title}"`, "var(--blue)");
-  }, 3000);
+    renderTitleStatus();
+    switchView("all-work");
+  } else {
+    // ── MOCK MODE: Simulate goal creation ──
+    const newId = `g${goals.length + 1}`;
+    const newGoal: Goal = {
+      id: newId,
+      title: description.charAt(0).toUpperCase() + description.slice(1),
+      summary: "Just created. Agents are analyzing and planning steps...",
+      status: "active",
+      progress: 0,
+      agentCount: 0,
+      steps: [
+        { name: "Analyze requirements", state: "running", agent: "architect", time: Date.now() },
+        { name: "Plan execution steps", state: "waiting" },
+        { name: "Execute plan", state: "waiting" },
+        { name: "Validate results", state: "waiting" },
+      ],
+      timeline: [
+        { time: Date.now(), text: "Goal created by <strong>you</strong>" },
+        { time: Date.now(), text: "<strong>architect</strong> began analyzing requirements" },
+      ],
+    };
 
-  // Simulate first step completion after 8s
-  setTimeout(() => {
-    newGoal.steps[0].state = "done";
-    newGoal.steps[0].time = Date.now();
-    newGoal.steps[1].state = "running";
-    newGoal.steps[1].agent = "architect";
-    newGoal.steps[1].time = Date.now();
-    newGoal.progress = 20;
-    newGoal.agentCount = 2;
-    newGoal.summary = "Requirements analyzed. Planning execution steps...";
-    newGoal.timeline.push({ time: Date.now(), text: "<strong>architect</strong> completed requirements analysis" });
-    activityLog.unshift({ time: Date.now(), text: `<strong>architect</strong> analyzed requirements for "${newGoal.title}"` });
+    goals.unshift(newGoal);
+    activityLog.unshift({ time: Date.now(), text: `<strong>you</strong> created goal: "${newGoal.title}"` });
+    showToast("Goal created", `"${newGoal.title}" \u2014 agents are picking it up`, "var(--accent)");
+
+    setTimeout(() => {
+      newGoal.agentCount = 1;
+      newGoal.progress = 8;
+      newGoal.summary = "Architect is analyzing requirements and planning steps.";
+      newGoal.timeline.push({ time: Date.now(), text: "<strong>architect</strong> identified 3 sub-tasks" });
+      activityLog.unshift({ time: Date.now(), text: `<strong>architect</strong> picked up "${newGoal.title}"` });
+      renderSidebarGoals();
+      if (currentView === "all-work") renderAllWork();
+      if (currentView === "activity") renderActivity();
+      showToast("Agent assigned", `architect is now working on "${newGoal.title}"`, "var(--blue)");
+    }, 3000);
+
+    setTimeout(() => {
+      newGoal.steps[0].state = "done";
+      newGoal.steps[0].time = Date.now();
+      newGoal.steps[1].state = "running";
+      newGoal.steps[1].agent = "architect";
+      newGoal.steps[1].time = Date.now();
+      newGoal.progress = 20;
+      newGoal.agentCount = 2;
+      newGoal.summary = "Requirements analyzed. Planning execution steps...";
+      newGoal.timeline.push({ time: Date.now(), text: "<strong>architect</strong> completed requirements analysis" });
+      activityLog.unshift({ time: Date.now(), text: `<strong>architect</strong> analyzed requirements for "${newGoal.title}"` });
+      renderSidebarGoals();
+      if (currentView === "all-work") renderAllWork();
+      if (currentView === "activity") renderActivity();
+    }, 8000);
+
     renderSidebarGoals();
-    if (currentView === "all-work") renderAllWork();
-    if (currentView === "activity") renderActivity();
-  }, 8000);
-
-  renderSidebarGoals();
-  renderTitleStatus();
-  switchView("all-work");
+    renderTitleStatus();
+    switchView("all-work");
+  }
 }
 
 // ── Agent Detail Panel ────────────────────────────────
@@ -1213,9 +1257,81 @@ function init(): void {
   // Dark mode toggle button
   document.getElementById("dark-mode-toggle")?.addEventListener("click", toggleDarkMode);
 
-  // Live simulation
+  // ── Fabric Engine Event Listener ──────────────────
+  if (bridge) {
+    bridge.onEvent((event: any) => {
+      handleFabricEvent(event);
+    });
+  }
+
+  // Live simulation (only for mock data goals)
   setInterval(simulateTick, 4000);
   setInterval(() => { if (currentView === "activity") renderActivity(); }, 15000);
+}
+
+// ── Handle Real-Time Events from Fabric Engine ────────
+
+function handleFabricEvent(event: any): void {
+  switch (event.type) {
+    case "goal-created": {
+      // Goal was already added in createGoalFromNL; refresh UI
+      renderSidebarGoals();
+      renderTitleStatus();
+      if (currentView === "all-work") renderAllWork();
+      break;
+    }
+    case "goal-updated": {
+      const data = event.data;
+      const existing = goals.find(g => g.id === event.goalId);
+      if (existing) {
+        // Merge updates from engine into local state
+        existing.status = data.status;
+        existing.progress = data.progress;
+        existing.summary = data.summary;
+        existing.agentCount = data.agentCount;
+        existing.steps = data.steps;
+        existing.timeline = data.timeline;
+      }
+      renderSidebarGoals();
+      renderTitleStatus();
+      if (currentView === "all-work") renderAllWork();
+      break;
+    }
+    case "step-updated": {
+      renderSidebarGoals();
+      if (currentView === "all-work") renderAllWork();
+      break;
+    }
+    case "activity": {
+      activityLog.unshift(event.data);
+      if (activityLog.length > 100) activityLog.pop();
+      if (currentView === "activity") renderActivity();
+      break;
+    }
+    case "toast": {
+      showToast(event.data.title, event.data.body, event.data.color);
+      break;
+    }
+    case "agent-message": {
+      // Could show in a dedicated panel — for now, add to activity
+      activityLog.unshift({
+        time: Date.now(),
+        text: `<strong>orchestrator</strong> ${event.data.text.slice(0, 120)}${event.data.text.length > 120 ? "..." : ""}`,
+      });
+      if (currentView === "activity") renderActivity();
+      break;
+    }
+    case "attention": {
+      attentionItems.push(event.data);
+      const badge = document.getElementById("attention-count");
+      if (badge) {
+        badge.textContent = String(attentionItems.length);
+        badge.style.display = "";
+      }
+      if (currentView === "needs-you") renderNeedsYou();
+      break;
+    }
+  }
 }
 
 document.addEventListener("DOMContentLoaded", init);
