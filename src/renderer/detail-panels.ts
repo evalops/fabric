@@ -62,9 +62,18 @@ function renderObservabilityMeta(goal: Goal): string {
 }
 
 function renderSteeringInput(goalId: string): string {
-  // Only show for active goals
   const goal = state.goals.find(g => g.id === goalId);
-  if (!goal || goal.status !== "active") return "";
+  if (!goal) return "";
+
+  // Show resume button for non-active goals
+  if (goal.status !== "active") {
+    return `
+      ${goal.lastError ? `<div style="font-size: 12px; color: var(--red); margin-bottom: 12px; padding: 8px 12px; background: var(--bg-surface); border: 1px solid var(--red); border-radius: var(--radius-xs);">Last error: ${goal.lastError}</div>` : ""}
+      <button id="resume-goal-btn" style="padding: 10px 20px; background: var(--accent); color: white; border: none; border-radius: var(--radius-sm); font-size: 13px; cursor: pointer; font-weight: 600; width: 100%; margin-bottom: 16px;">Resume this goal</button>
+    `;
+  }
+
+  // Show steering input for active goals
   return `
     <div class="detail-section-title">Steer this goal</div>
     <div style="display: flex; gap: 8px; margin-bottom: 16px;">
@@ -403,6 +412,18 @@ export function openGoalDetail(goalId: string): void {
     steeringSend.addEventListener("click", sendSteering);
     steeringInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") sendSteering();
+    });
+  }
+
+  // Wire resume button
+  const resumeBtn = panel.querySelector("#resume-goal-btn");
+  if (resumeBtn) {
+    resumeBtn.addEventListener("click", () => {
+      const bridge = (window as any).fabric;
+      if (bridge?.resumeGoal) {
+        bridge.resumeGoal(goalId);
+        closeDetail();
+      }
     });
   }
 }

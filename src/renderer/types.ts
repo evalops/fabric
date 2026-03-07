@@ -105,6 +105,7 @@ export interface FabricBridge {
   getGoals(): Promise<any[]>;
   getGoal(goalId: string): Promise<any>;
   pauseGoal(goalId: string): Promise<{ success: boolean }>;
+  resumeGoal(goalId: string): Promise<{ success: boolean; error?: string }>;
   steerGoal(goalId: string, message: string): Promise<{ success: boolean }>;
   onEvent(callback: (event: any) => void): () => void;
   updateSettings(settings: { apiKey?: string; model?: string; maxBudgetUsd?: number; maxTurns?: number }): Promise<{ success: boolean }>;

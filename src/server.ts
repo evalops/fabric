@@ -272,6 +272,18 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
+  // POST /api/goals/:id/resume — Resume a paused goal
+  const resumeMatch = path.match(/^\/api\/goals\/([^/]+)\/resume$/);
+  if (resumeMatch && method === "POST") {
+    try {
+      await engine.resumeGoal(resumeMatch[1]);
+      json(res, { status: "resumed" });
+    } catch (err: any) {
+      json(res, { error: err.message }, 400);
+    }
+    return;
+  }
+
   // POST /api/goals/:id/steer — Send a steering message to redirect a running goal
   const steerMatch = path.match(/^\/api\/goals\/([^/]+)\/steer$/);
   if (steerMatch && method === "POST") {

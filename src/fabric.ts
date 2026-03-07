@@ -865,6 +865,50 @@ Work in the current directory. Be efficient and focused.${extPromptSnippets ? `\
     if (controller) controller.abort();
   }
 
+  /**
+   * Resume a previously paused goal. Re-starts agent execution with a
+   * continuation prompt that summarizes prior progress.
+   */
+  async resumeGoal(goalId: string): Promise<void> {
+    const goal = this.goals.get(goalId);
+    if (!goal) throw new Error(`Goal ${goalId} not found`);
+    if (goal.status === "active") throw new Error(`Goal ${goalId} is already active`);
+
+    // Build a continuation description with prior context
+    const completedSteps = goal.steps.filter(s => s.state === "done").map(s => s.name).join(", ");
+    const continuationPrompt = [
+      `Resume the previously paused goal: "${goal.title}"`,
+      goal.summary ? `Previous progress: ${goal.summary}` : "",
+      completedSteps ? `Completed steps: ${completedSteps}` : "",
+      `Continue from where you left off. Do not repeat already completed work.`,
+    ].filter(Boolean).join("\n");
+
+    // Reset goal state for re-execution
+    goal.status = "active";
+    goal.outcome = undefined;
+    goal.lastError = undefined;
+    goal.summary = "Resuming...";
+
+    this.emitEvent({ type: "goal-updated", goalId, data: goal });
+    this.emitEvent({
+      type: "toast",
+      data: { title: "Goal resumed", body: `"${goal.title}" — agents re-engaging`, color: "var(--accent)" },
+    });
+    this.emitEvent({
+      type: "activity",
+      goalId,
+      data: { time: Date.now(), text: `<strong>you</strong> resumed goal: "${goal.title}"` },
+    });
+
+    // Re-execute
+    this.executeGoal(goalId, continuationPrompt).catch(err => {
+      console.error(`Goal ${goalId} resume failed:`, err);
+      goal.status = "failed";
+      goal.summary = `Failed on resume: ${err.message}`;
+      this.emitEvent({ type: "goal-updated", goalId, data: goal });
+    });
+  }
+
   // ── Event Emitting ──────────────────────────────────
 
   private emitEvent(event: FabricEvent): void {

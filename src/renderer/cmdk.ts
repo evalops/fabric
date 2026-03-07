@@ -76,6 +76,23 @@ function getCmdkActions(query: string): { group: string; items: CmdkAction[] }[]
       }
     }
   }
+  if (q.includes("resume") || q.includes("restart") || q.includes("retry")) {
+    const pausedGoals = state.goals.filter(g => g.status !== "active" && g.status !== "complete");
+    pausedGoals.forEach(g => {
+      commandActions.push({
+        icon: "\u25b6",
+        text: `Resume "${g.title}"`,
+        hint: g.outcome?.replace(/_/g, " ") || g.status,
+        action: () => {
+          closeCmdk();
+          const bridge = (window as any).fabric;
+          if (bridge?.resumeGoal) bridge.resumeGoal(g.id);
+          showToast("Goal resumed", `"${g.title}" is being resumed`, "var(--accent)");
+          state.activityLog.unshift({ time: Date.now(), text: `<strong>you</strong> resumed "${g.title}"` });
+        },
+      });
+    });
+  }
   if (q.includes("budget") || q.includes("spend") || q.includes("cost")) {
     commandActions.push({ icon: "$", text: `Today's spend: $${getTotalCost().toFixed(2)}`, hint: "info", action: () => { closeCmdk(); callbacks.switchView("costs"); } });
   }

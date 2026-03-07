@@ -53,6 +53,16 @@ ipcMain.handle("fabric:pause-goal", async (_event, goalId: string) => {
   return { success: true };
 });
 
+// Resume a paused goal
+ipcMain.handle("fabric:resume-goal", async (_event, goalId: string) => {
+  try {
+    await engine.resumeGoal(goalId);
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+});
+
 // Send a steering message to redirect a running goal
 ipcMain.handle("fabric:steer-goal", async (_event, goalId: string, message: string) => {
   engine.sendSteeringMessage(goalId, message);

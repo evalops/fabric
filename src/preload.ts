@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld("fabric", {
   pauseGoal: (goalId: string) =>
     ipcRenderer.invoke("fabric:pause-goal", goalId),
 
+  // Resume a paused goal
+  resumeGoal: (goalId: string) =>
+    ipcRenderer.invoke("fabric:resume-goal", goalId),
+
   // Send a steering message to redirect a running goal
   steerGoal: (goalId: string, message: string) =>
     ipcRenderer.invoke("fabric:steer-goal", goalId, message),
