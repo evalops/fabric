@@ -190,6 +190,19 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
+  // POST /api/goals/:id/steer — Send a steering message to redirect a running goal
+  const steerMatch = path.match(/^\/api\/goals\/([^/]+)\/steer$/);
+  if (steerMatch && method === "POST") {
+    const body = await parseBody(req);
+    if (!body.message) {
+      json(res, { error: "message is required" }, 400);
+      return;
+    }
+    engine.sendSteeringMessage(steerMatch[1], body.message);
+    json(res, { status: "steering message sent" });
+    return;
+  }
+
   // ── Observability Routes ──────────────────────────
 
   // GET /api/costs/today

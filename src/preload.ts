@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld("fabric", {
   pauseGoal: (goalId: string) =>
     ipcRenderer.invoke("fabric:pause-goal", goalId),
 
+  // Send a steering message to redirect a running goal
+  steerGoal: (goalId: string, message: string) =>
+    ipcRenderer.invoke("fabric:steer-goal", goalId, message),
+
   // Listen for real-time events from the engine
   onEvent: (callback: (event: any) => void) => {
     const handler = (_event: any, data: any) => callback(data);

@@ -44,6 +44,9 @@ export interface FabricGoal {
   turnCount: number;
   toolCalls: ToolCallRecord[];
   outcome?: GoalOutcome;
+  // Retry tracking (inspired by pi-mono)
+  retryCount: number;
+  lastError?: string;
 }
 
 export type GoalOutcome = "success" | "budget_exhausted" | "turns_exhausted" | "user_abort" | "error";
@@ -56,8 +59,14 @@ export interface ToolCallRecord {
   goalId: string;
 }
 
+export type FabricEventType =
+  | "goal-created" | "goal-updated" | "step-updated"
+  | "activity" | "attention" | "toast"
+  | "agent-message" | "cost-update" | "tool-call"
+  | "observability" | "steering" | "retry";
+
 export interface FabricEvent {
-  type: "goal-created" | "goal-updated" | "step-updated" | "activity" | "attention" | "toast" | "agent-message" | "cost-update" | "tool-call" | "observability";
+  type: FabricEventType;
   goalId?: string;
   data: any;
 }
@@ -71,6 +80,47 @@ export interface FabricAttention {
   context: string;
   actions: { label: string; style: string }[];
   resolve?: (action: string) => void;
+}
+
+// ── Model Pricing (per 1M tokens) ────────────────────
+// Inspired by pi-mono: cost tracking built into the model type
+
+const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+  sonnet:  { input: 3.00,  output: 15.00 },
+  opus:    { input: 15.00, output: 75.00 },
+  haiku:   { input: 0.80,  output: 4.00  },
+  inherit: { input: 3.00,  output: 15.00 },  // default to sonnet pricing
+};
+
+// ── Retry Configuration ──────────────────────────────
+// Inspired by pi-mono: pattern-matched retryable errors with backoff
+
+const RETRYABLE_PATTERNS = [
+  /overloaded/i, /rate.?limit/i, /too many requests/i,
+  /529/, /429/, /500/, /502/, /503/, /504/,
+  /ECONNRESET/, /ECONNREFUSED/, /ETIMEDOUT/,
+  /fetch failed/i, /network error/i,
+];
+
+interface RetryConfig {
+  maxRetries: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+}
+
+const DEFAULT_RETRY: RetryConfig = {
+  maxRetries: 3,
+  baseDelayMs: 1000,
+  maxDelayMs: 60000,
+};
+
+function isRetryableError(err: Error): boolean {
+  const msg = err.message || "";
+  return RETRYABLE_PATTERNS.some(p => p.test(msg));
+}
+
+function retryDelay(attempt: number, config: RetryConfig): number {
+  return Math.min(config.baseDelayMs * Math.pow(2, attempt), config.maxDelayMs);
 }
 
 // ── Custom MCP Tools for Fabric ───────────────────────
@@ -135,8 +185,11 @@ export class FabricEngine extends EventEmitter {
   private defaultBudget = 2.00;
   private defaultMaxTurns = 30;
   private defaultModel: "sonnet" | "opus" | "haiku" | "inherit" = "sonnet";
+  private retryConfig: RetryConfig = DEFAULT_RETRY;
   // Track in-flight tool calls for duration measurement
   private pendingToolCalls: Map<string, { tool: string; startedAt: number; goalId: string }> = new Map();
+  // Steering queue: messages injected mid-execution (inspired by pi-mono)
+  private steeringQueues: Map<string, string[]> = new Map();
 
   constructor() {
     super();
@@ -174,6 +227,7 @@ export class FabricEngine extends EventEmitter {
       startedAt: Date.now(),
       turnCount: 0,
       toolCalls: [],
+      retryCount: 0,
     };
 
     this.goals.set(id, goal);
@@ -201,8 +255,47 @@ export class FabricEngine extends EventEmitter {
   }
 
   /**
+   * Send a steering message to a running goal.
+   * Inspired by pi-mono's dual-queue pattern: steering messages interrupt
+   * the agent after the current tool call finishes, redirecting its focus.
+   */
+  sendSteeringMessage(goalId: string, message: string): void {
+    let queue = this.steeringQueues.get(goalId);
+    if (!queue) {
+      queue = [];
+      this.steeringQueues.set(goalId, queue);
+    }
+    queue.push(message);
+    this.emitEvent({
+      type: "steering",
+      goalId,
+      data: { message, time: Date.now() },
+    });
+    this.emitEvent({
+      type: "activity",
+      goalId,
+      data: { time: Date.now(), text: `<strong>you</strong> sent steering message: "${message}"` },
+    });
+  }
+
+  /**
+   * Drain pending steering messages for a goal.
+   * Called in the PostToolUse hook to check for human interruptions.
+   */
+  private drainSteeringMessages(goalId: string): string[] {
+    const queue = this.steeringQueues.get(goalId);
+    if (!queue || queue.length === 0) return [];
+    const messages = [...queue];
+    queue.length = 0;
+    return messages;
+  }
+
+  /**
    * Execute a goal using the Claude Agent SDK.
-   * The agent will decompose the goal into steps, then execute them.
+   * Implements retry with exponential backoff (inspired by pi-mono):
+   * - Pattern-matched retryable errors (429, 500, overloaded, etc.)
+   * - Error scrubbing: transient errors are NOT shown to the LLM on retry
+   * - Retry counter resets on any successful assistant response
    */
   private async executeGoal(goalId: string, description: string): Promise<void> {
     const goal = this.goals.get(goalId);
@@ -210,12 +303,12 @@ export class FabricEngine extends EventEmitter {
 
     const abortController = new AbortController();
     this.abortControllers.set(goalId, abortController);
+    this.steeringQueues.set(goalId, []);
 
     const fabricTools = createFabricTools(this);
 
-    const options: Options = {
+    const buildOptions = (): Options => ({
       abortController,
-      // Use the orchestrator agent to decompose and execute
       agents: {
         "researcher": {
           description: "Research agent for gathering information and analyzing code",
@@ -269,7 +362,7 @@ export class FabricEngine extends EventEmitter {
           }],
         }],
       },
-    };
+    });
 
     const prompt = `You are the Fabric orchestration agent. Your job is to accomplish the following goal:
 
@@ -285,24 +378,75 @@ IMPORTANT: You have access to Fabric tools for managing the work graph. Follow t
 
 Work in the current directory. Be efficient and focused.`;
 
-    try {
-      const result = query({ prompt, options });
+    // Retry loop with exponential backoff (pi-mono pattern)
+    let attempt = 0;
+    while (true) {
+      try {
+        const options = buildOptions();
+        // If resuming from a retry, use the session to continue
+        const queryArgs = attempt > 0 && goal.sessionId
+          ? { prompt, options, sessionId: goal.sessionId }
+          : { prompt, options };
 
-      for await (const message of result) {
-        this.handleSDKMessage(goalId, message);
-      }
-    } catch (err: any) {
-      if (err.name === "AbortError") {
-        goal.status = "blocked";
-        goal.summary = "Paused by user";
-        goal.outcome = "user_abort";
-      } else {
+        const result = query(queryArgs);
+
+        for await (const message of result) {
+          this.handleSDKMessage(goalId, message);
+          // Reset retry counter on any successful assistant response (pi-mono pattern)
+          if (message.type === "assistant") {
+            attempt = 0;
+            goal.retryCount = 0;
+          }
+        }
+        // Normal completion — break out of retry loop
+        break;
+      } catch (err: any) {
+        if (err.name === "AbortError") {
+          goal.status = "blocked";
+          goal.summary = "Paused by user";
+          goal.outcome = "user_abort";
+          break;
+        }
+
+        // Check if error is retryable
+        if (isRetryableError(err) && attempt < this.retryConfig.maxRetries) {
+          attempt++;
+          goal.retryCount = attempt;
+          goal.lastError = err.message;
+          const delay = retryDelay(attempt - 1, this.retryConfig);
+
+          this.emitEvent({
+            type: "retry",
+            goalId,
+            data: {
+              attempt,
+              maxRetries: this.retryConfig.maxRetries,
+              delayMs: delay,
+              error: err.message,
+            },
+          });
+          this.emitEvent({
+            type: "activity",
+            goalId,
+            data: {
+              time: Date.now(),
+              text: `<strong>system</strong> retrying (attempt ${attempt}/${this.retryConfig.maxRetries}) after ${Math.round(delay / 1000)}s — ${err.message}`,
+            },
+          });
+
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+
+        // Non-retryable or max retries exhausted
         goal.outcome = "error";
+        goal.lastError = err.message;
         throw err;
       }
-    } finally {
-      this.abortControllers.delete(goalId);
     }
+
+    this.abortControllers.delete(goalId);
+    this.steeringQueues.delete(goalId);
   }
 
   /**
@@ -340,14 +484,15 @@ Work in the current directory. Be efficient and focused.`;
             }
           }
         }
-        // Track token usage and costs
+        // Track token usage and costs (model-aware pricing, inspired by pi-mono)
         const usage = (assistantMsg.message as any).usage;
         if (usage) {
           goal.inputTokens += usage.input_tokens || 0;
           goal.outputTokens += usage.output_tokens || 0;
-          // Approximate pricing (Sonnet: $3/$15 per 1M tokens)
-          goal.costUsd = (goal.inputTokens / 1_000_000) * 3 + (goal.outputTokens / 1_000_000) * 15;
-          this.emitEvent({ type: "cost-update", goalId, data: { costUsd: goal.costUsd, inputTokens: goal.inputTokens, outputTokens: goal.outputTokens } });
+          const pricing = MODEL_PRICING[this.defaultModel] || MODEL_PRICING.sonnet;
+          goal.costUsd = (goal.inputTokens / 1_000_000) * pricing.input
+                       + (goal.outputTokens / 1_000_000) * pricing.output;
+          this.emitEvent({ type: "cost-update", goalId, data: { costUsd: goal.costUsd, inputTokens: goal.inputTokens, outputTokens: goal.outputTokens, model: this.defaultModel } });
         }
         // Store session ID
         if (assistantMsg.session_id) {
@@ -435,6 +580,8 @@ Work in the current directory. Be efficient and focused.`;
 
   /**
    * PostToolUse hook — records tool call duration and outcome for observability.
+   * Also checks the steering queue (pi-mono pattern): if a human sent a message
+   * while the agent was executing a tool, we inject it as context for the next turn.
    */
   private createPostToolHook(goalId: string) {
     return async (input: any) => {
@@ -466,7 +613,6 @@ Work in the current directory. Be efficient and focused.`;
           data: record,
         });
       } else if (toolName && goal) {
-        // Fallback: no matching pending call, still record what we can
         goal.toolCalls.push({
           tool: toolName,
           startedAt: Date.now(),
@@ -474,6 +620,24 @@ Work in the current directory. Be efficient and focused.`;
           success: input.error == null,
           goalId,
         });
+      }
+
+      // Check steering queue — inject human messages mid-execution (pi-mono pattern)
+      // Uses the SDK's additionalContext on PostToolUse to surface steering to the LLM
+      const steeringMessages = this.drainSteeringMessages(goalId);
+      if (steeringMessages.length > 0) {
+        const combined = steeringMessages.join("\n\n");
+        this.emitEvent({
+          type: "activity",
+          goalId,
+          data: { time: Date.now(), text: `<strong>system</strong> injecting steering: "${combined}"` },
+        });
+        return {
+          hookSpecificOutput: {
+            hookEventName: "PostToolUse" as const,
+            additionalContext: `[HUMAN STEERING] The user has sent you a new instruction. Prioritize this:\n\n${combined}`,
+          },
+        };
       }
 
       return {};
