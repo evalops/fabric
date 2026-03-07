@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fabric</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="titlebar">
+    <span class="titlebar-title">Fabric</span>
+    <span class="titlebar-subtitle" id="titlebar-status"></span>
+    <span class="titlebar-shortcut" title="Command bar">&#8984;K</span>
+  </div>
+
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">Views</div>
+        <div class="sidebar-item active" data-view="needs-you">
+          <span class="sidebar-icon">!</span>
+          <span>Needs you</span>
+          <span class="sidebar-badge" id="attention-count">2</span>
+        </div>
+        <div class="sidebar-item" data-view="all-work">
+          <span class="sidebar-icon">&#9671;</span>
+          <span>All work</span>
+        </div>
+        <div class="sidebar-item" data-view="activity">
+          <span class="sidebar-icon">&#8942;</span>
+          <span>Activity</span>
+        </div>
+        <div class="sidebar-item" data-view="agents">
+          <span class="sidebar-icon">&#10022;</span>
+          <span>Agents</span>
+        </div>
+        <div class="sidebar-item" data-view="graph">
+          <span class="sidebar-icon">&#9678;</span>
+          <span>Graph</span>
+        </div>
+      </div>
+
+      <div class="sidebar-divider"></div>
+
+      <div class="sidebar-section sidebar-goals-section">
+        <div class="sidebar-label">Goals</div>
+        <div id="sidebar-goals"></div>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="footer-stat">
+          <div class="footer-dot" style="background: var(--green)"></div>
+          <span id="footer-agents">142 agents</span>
+        </div>
+        <div class="footer-stat">
+          <span id="footer-spend">$284 today</span>
+        </div>
+        <button class="dark-mode-btn" id="dark-mode-toggle" title="Toggle dark mode (&#8984;D)">&#9790;</button>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <div class="view-header">
+        <div class="view-title" id="view-title">Needs you</div>
+        <div class="view-subtitle" id="view-subtitle">Things that need a human decision</div>
+      </div>
+      <div class="feed" id="feed"></div>
+    </main>
+  </div>
+
+  <!-- Command bar overlay -->
+  <div class="cmdk-overlay" id="cmdk-overlay">
+    <div class="cmdk">
+      <div class="cmdk-input-wrap">
+        <span class="cmdk-search-icon">&#8981;</span>
+        <input class="cmdk-input" id="cmdk-input" type="text" placeholder="Ask, search, or &quot;create: fix login bug&quot;..." autocomplete="off" spellcheck="false" />
+        <span class="cmdk-hint">esc</span>
+      </div>
+      <div class="cmdk-results" id="cmdk-results"></div>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Detail slide-over -->
+  <div class="detail-overlay" id="detail-overlay">
+    <div class="detail-panel" id="detail-panel"></div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
