@@ -378,6 +378,13 @@ html, body {
   border-color: var(--border-lit);
   box-shadow: var(--shadow-sm);
 }
+.goal-card.kb-focused,
+.agent-card.kb-focused,
+.attention-card.kb-focused {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow-sm);
+  outline: none;
+}
 
 .goal-top {
   display: flex;

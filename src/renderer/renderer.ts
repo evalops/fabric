@@ -178,6 +178,37 @@ function init(): void {
       const numMap: Record<string, string> = { "1": "needs-you", "2": "all-work", "3": "activity", "4": "agents", "5": "graph", "6": "costs", "7": "settings" };
       if (numMap[e.key]) { e.preventDefault(); switchView(numMap[e.key]); return; }
       if (e.key === "?") { e.preventDefault(); toggleShortcutHelp(); return; }
+
+      // j/k navigation in list views
+      if (e.key === "j" || e.key === "k") {
+        const feed = document.getElementById("feed");
+        if (!feed) return;
+        const selector = state.currentView === "all-work" ? ".goal-card"
+          : state.currentView === "agents" ? ".agent-card"
+          : state.currentView === "needs-you" ? ".attention-card"
+          : null;
+        if (!selector) return;
+        const items = feed.querySelectorAll(selector);
+        if (items.length === 0) return;
+        e.preventDefault();
+        const current = feed.querySelector(`${selector}.kb-focused`);
+        let idx = current ? Array.from(items).indexOf(current) : -1;
+        if (current) current.classList.remove("kb-focused");
+        idx = e.key === "j" ? Math.min(idx + 1, items.length - 1) : Math.max(idx - 1, 0);
+        items[idx].classList.add("kb-focused");
+        items[idx].scrollIntoView({ block: "nearest", behavior: "smooth" });
+      }
+
+      // Enter to open focused item
+      if (e.key === "Enter") {
+        const feed = document.getElementById("feed");
+        if (!feed) return;
+        const focused = feed.querySelector(".kb-focused") as HTMLElement | null;
+        if (focused) {
+          e.preventDefault();
+          focused.click();
+        }
+      }
     }
   });
 
@@ -193,6 +224,8 @@ function init(): void {
         <kbd style="font-family:var(--font-mono);font-size:11px;padding:2px 6px;background:var(--bg-surface);border:1px solid var(--border);border-radius:4px;text-align:center;">\u2318K</kbd><span style="color:var(--text-secondary);">Command palette</span>
         <kbd style="font-family:var(--font-mono);font-size:11px;padding:2px 6px;background:var(--bg-surface);border:1px solid var(--border);border-radius:4px;text-align:center;">\u2318D</kbd><span style="color:var(--text-secondary);">Toggle dark mode</span>
         <kbd style="font-family:var(--font-mono);font-size:11px;padding:2px 6px;background:var(--bg-surface);border:1px solid var(--border);border-radius:4px;text-align:center;">1-7</kbd><span style="color:var(--text-secondary);">Switch views</span>
+        <kbd style="font-family:var(--font-mono);font-size:11px;padding:2px 6px;background:var(--bg-surface);border:1px solid var(--border);border-radius:4px;text-align:center;">j/k</kbd><span style="color:var(--text-secondary);">Navigate list items</span>
+        <kbd style="font-family:var(--font-mono);font-size:11px;padding:2px 6px;background:var(--bg-surface);border:1px solid var(--border);border-radius:4px;text-align:center;">Enter</kbd><span style="color:var(--text-secondary);">Open focused item</span>
         <kbd style="font-family:var(--font-mono);font-size:11px;padding:2px 6px;background:var(--bg-surface);border:1px solid var(--border);border-radius:4px;text-align:center;">Esc</kbd><span style="color:var(--text-secondary);">Close panel/dialog</span>
         <kbd style="font-family:var(--font-mono);font-size:11px;padding:2px 6px;background:var(--bg-surface);border:1px solid var(--border);border-radius:4px;text-align:center;">?</kbd><span style="color:var(--text-secondary);">This help</span>
       </div>

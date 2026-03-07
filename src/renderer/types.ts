@@ -166,8 +166,9 @@ export interface FabricBridge {
   pauseGoal(goalId: string): Promise<{ success: boolean }>;
   resumeGoal(goalId: string): Promise<{ success: boolean; error?: string }>;
   steerGoal(goalId: string, message: string): Promise<{ success: boolean }>;
+  cancelGoal(goalId: string): Promise<{ success: boolean }>;
   onEvent(callback: (event: any) => void): () => void;
-  updateSettings(settings: { apiKey?: string; model?: string; maxBudgetUsd?: number; maxTurns?: number }): Promise<{ success: boolean }>;
+  updateSettings(settings: Partial<FabricSettings>): Promise<{ success: boolean }>;
 }
 
 export interface GoalTemplate {

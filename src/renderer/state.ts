@@ -101,6 +101,14 @@ export function saveSettings(): void {
       model: state.settings.model,
       maxBudgetUsd: state.settings.maxBudgetUsd,
       maxTurns: state.settings.maxTurns,
+      toolAllowlist: state.settings.toolAllowlist,
+      toolBlocklist: state.settings.toolBlocklist,
+      sandboxPaths: state.settings.sandboxPaths,
+      blockedPaths: state.settings.blockedPaths,
+      allowedDomains: state.settings.allowedDomains,
+      humanApprovalTools: state.settings.humanApprovalTools,
+      maxConcurrentGoals: state.settings.maxConcurrentGoals,
+      maxConsecutiveErrors: state.settings.maxConsecutiveErrors,
     });
   }
 }
@@ -114,6 +122,11 @@ export function applyTheme(theme: FabricSettings["theme"]): void {
   const btn = document.getElementById("dark-mode-toggle");
   if (btn) btn.textContent = shouldBeDark ? "\u2600" : "\u263e";
 }
+
+// Listen for OS theme changes when in "system" mode
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  if (state.settings.theme === "system") applyTheme("system");
+});
 
 export function toggleDarkMode(): void {
   state.darkMode = !state.darkMode;
