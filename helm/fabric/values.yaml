@@ -1,0 +1,73 @@
+# Fabric Helm chart values
+
+replicaCount: 1
+
+image:
+  repository: fabric
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Application configuration (non-sensitive)
+config:
+  port: "3000"
+  nodeEnv: "production"
+  defaultBudgetUsd: "2.00"
+  defaultMaxTurns: "30"
+  defaultModel: "sonnet"
+
+# Secrets — override in values-prod.yaml
+secrets:
+  anthropicApiKey: ""
+
+# PostgreSQL
+postgresql:
+  enabled: true
+  image: postgres:15-alpine
+  storage: 10Gi
+  database: fabric
+  username: fabric
+  password: ""  # Set in values-prod.yaml
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 250m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
+# Fabric API resources
+resources:
+  requests:
+    memory: 256Mi
+    cpu: 250m
+  limits:
+    memory: 512Mi
+    cpu: "1"
+
+# Service
+service:
+  type: ClusterIP
+  port: 3000
+
+# Ingress
+ingress:
+  enabled: false
+  className: nginx
+  host: fabric.example.com
+  tls: false
+  annotations: {}
+
+# Health checks
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 30
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
