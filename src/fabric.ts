@@ -40,10 +40,24 @@ export interface FabricGoal {
   outputTokens: number;
   startedAt: number;
   completedAt?: number;
+  // Observability
+  turnCount: number;
+  toolCalls: ToolCallRecord[];
+  outcome?: GoalOutcome;
+}
+
+export type GoalOutcome = "success" | "budget_exhausted" | "turns_exhausted" | "user_abort" | "error";
+
+export interface ToolCallRecord {
+  tool: string;
+  startedAt: number;
+  durationMs: number;
+  success: boolean;
+  goalId: string;
 }
 
 export interface FabricEvent {
-  type: "goal-created" | "goal-updated" | "step-updated" | "activity" | "attention" | "toast" | "agent-message" | "cost-update";
+  type: "goal-created" | "goal-updated" | "step-updated" | "activity" | "attention" | "toast" | "agent-message" | "cost-update" | "tool-call" | "observability";
   goalId?: string;
   data: any;
 }
@@ -121,6 +135,8 @@ export class FabricEngine extends EventEmitter {
   private defaultBudget = 2.00;
   private defaultMaxTurns = 30;
   private defaultModel: "sonnet" | "opus" | "haiku" | "inherit" = "sonnet";
+  // Track in-flight tool calls for duration measurement
+  private pendingToolCalls: Map<string, { tool: string; startedAt: number; goalId: string }> = new Map();
 
   constructor() {
     super();
@@ -156,6 +172,8 @@ export class FabricEngine extends EventEmitter {
       inputTokens: 0,
       outputTokens: 0,
       startedAt: Date.now(),
+      turnCount: 0,
+      toolCalls: [],
     };
 
     this.goals.set(id, goal);
@@ -277,7 +295,9 @@ Work in the current directory. Be efficient and focused.`;
       if (err.name === "AbortError") {
         goal.status = "blocked";
         goal.summary = "Paused by user";
+        goal.outcome = "user_abort";
       } else {
+        goal.outcome = "error";
         throw err;
       }
     } finally {
@@ -295,6 +315,8 @@ Work in the current directory. Be efficient and focused.`;
     switch (message.type) {
       case "assistant": {
         const assistantMsg = message as SDKAssistantMessage;
+        // Count turns
+        goal.turnCount++;
         // Extract text content and tool calls
         for (const block of assistantMsg.message.content) {
           if (block.type === "text" && block.text.trim()) {
@@ -336,10 +358,11 @@ Work in the current directory. Be efficient and focused.`;
       case "result": {
         const resultMsg = message as SDKResultMessage;
         if (resultMsg.subtype === "success") {
-          // Goal should already be marked complete by complete_goal tool
+          goal.outcome = "success";
           if (goal.status === "active") {
             goal.status = "complete";
             goal.progress = 100;
+            goal.completedAt = Date.now();
             this.emitEvent({ type: "goal-updated", goalId, data: goal });
           }
           this.emitEvent({
@@ -348,46 +371,111 @@ Work in the current directory. Be efficient and focused.`;
             data: { time: Date.now(), text: `<strong>orchestrator</strong> finished working on "${goal.title}"` },
           });
         } else if (resultMsg.subtype === "error_max_turns") {
+          goal.outcome = "turns_exhausted";
           goal.summary = "Reached maximum turns. Partial progress saved.";
           this.emitEvent({ type: "goal-updated", goalId, data: goal });
+          this.emitEvent({
+            type: "toast",
+            data: { title: "Turn limit", body: `Goal "${goal.title}" hit its ${this.defaultMaxTurns}-turn limit`, color: "var(--amber)" },
+          });
         } else if (resultMsg.subtype === "error_max_budget_usd") {
+          goal.outcome = "budget_exhausted";
           goal.summary = "Budget limit reached. Partial progress saved.";
           this.emitEvent({ type: "goal-updated", goalId, data: goal });
           this.emitEvent({
             type: "toast",
-            data: { title: "Budget limit", body: `Goal "${goal.title}" hit its $2 budget cap`, color: "var(--amber)" },
+            data: { title: "Budget limit", body: `Goal "${goal.title}" hit its $${this.defaultBudget} budget cap`, color: "var(--amber)" },
           });
         }
+        // Emit observability summary
+        this.emitEvent({
+          type: "observability",
+          goalId,
+          data: {
+            outcome: goal.outcome,
+            turnCount: goal.turnCount,
+            toolCallCount: goal.toolCalls.length,
+            totalCost: goal.costUsd,
+            durationMs: (goal.completedAt || Date.now()) - goal.startedAt,
+            toolBreakdown: this.getToolBreakdown(goalId),
+          },
+        });
         break;
       }
     }
   }
 
   /**
-   * PreToolUse hook — surfaces tool usage to the UI.
+   * PreToolUse hook — surfaces tool usage to the UI and starts timing.
    */
   private createPreToolHook(goalId: string) {
     return async (input: any) => {
       const toolName = input.tool_name as string | undefined;
-      if (toolName && !toolName.startsWith("mcp__fabric__")) {
-        this.emitEvent({
-          type: "activity",
-          goalId,
-          data: {
-            time: Date.now(),
-            text: `<strong>agent</strong> using ${toolName}`,
-          },
-        });
+      if (toolName) {
+        // Start timing this tool call
+        const callId = `${goalId}:${toolName}:${Date.now()}`;
+        this.pendingToolCalls.set(callId, { tool: toolName, startedAt: Date.now(), goalId });
+        // Store the call ID on the input for the post-hook to find
+        (input as any).__fabricCallId = callId;
+
+        if (!toolName.startsWith("mcp__fabric__")) {
+          this.emitEvent({
+            type: "activity",
+            goalId,
+            data: {
+              time: Date.now(),
+              text: `<strong>agent</strong> using ${toolName}`,
+            },
+          });
+        }
       }
       return {};
     };
   }
 
   /**
-   * PostToolUse hook — tracks completed tool calls.
+   * PostToolUse hook — records tool call duration and outcome for observability.
    */
-  private createPostToolHook(_goalId: string) {
-    return async () => {
+  private createPostToolHook(goalId: string) {
+    return async (input: any) => {
+      const toolName = input.tool_name as string | undefined;
+      const callId = (input as any).__fabricCallId as string | undefined;
+      const goal = this.goals.get(goalId);
+
+      if (callId && this.pendingToolCalls.has(callId)) {
+        const pending = this.pendingToolCalls.get(callId)!;
+        this.pendingToolCalls.delete(callId);
+        const durationMs = Date.now() - pending.startedAt;
+        const isError = input.error != null;
+
+        const record: ToolCallRecord = {
+          tool: pending.tool,
+          startedAt: pending.startedAt,
+          durationMs,
+          success: !isError,
+          goalId,
+        };
+
+        if (goal) {
+          goal.toolCalls.push(record);
+        }
+
+        this.emitEvent({
+          type: "tool-call",
+          goalId,
+          data: record,
+        });
+      } else if (toolName && goal) {
+        // Fallback: no matching pending call, still record what we can
+        goal.toolCalls.push({
+          tool: toolName,
+          startedAt: Date.now(),
+          durationMs: 0,
+          success: input.error == null,
+          goalId,
+        });
+      }
+
       return {};
     };
   }
@@ -467,6 +555,22 @@ Work in the current directory. Be efficient and focused.`;
       goalId,
       data: { time: Date.now(), text: `<strong>orchestrator</strong> completed "${goal.title}"` },
     });
+  }
+
+  /**
+   * Compute tool call statistics for a goal.
+   */
+  private getToolBreakdown(goalId: string): Record<string, { count: number; totalMs: number; errors: number }> {
+    const goal = this.goals.get(goalId);
+    if (!goal) return {};
+    const breakdown: Record<string, { count: number; totalMs: number; errors: number }> = {};
+    for (const call of goal.toolCalls) {
+      if (!breakdown[call.tool]) breakdown[call.tool] = { count: 0, totalMs: 0, errors: 0 };
+      breakdown[call.tool].count++;
+      breakdown[call.tool].totalMs += call.durationMs;
+      if (!call.success) breakdown[call.tool].errors++;
+    }
+    return breakdown;
   }
 
   /**

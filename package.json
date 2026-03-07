@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc && cp src/renderer/index.html dist/renderer/ && cp src/renderer/styles.css dist/renderer/",
+    "build": "tsc -p tsconfig.main.json && node esbuild.renderer.mjs && cp src/renderer/index.html dist/renderer/ && cp src/renderer/styles.css dist/renderer/",
     "start": "npm run build && electron .",
     "dev": "npm run start"
   },
@@ -14,6 +14,7 @@
   "devDependencies": {
     "@types/node": "^25.3.5",
     "electron": "^40.8.0",
+    "esbuild": "^0.27.3",
     "typescript": "^5.9.3"
   },
   "dependencies": {
