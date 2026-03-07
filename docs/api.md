@@ -146,6 +146,110 @@ Pause a running goal by aborting agent execution.
 }
 ```
 
+#### `POST /api/goals/:id/resume`
+
+Resume a previously paused, blocked, or failed goal. Re-starts agent execution with a continuation prompt that avoids repeating completed work.
+
+**Response:**
+```json
+{
+  "status": "resumed"
+}
+```
+
+**Error (400):** Goal is already active or not found.
+
+#### `GET /api/goals/:id/dependencies`
+
+List goal dependencies (blocks/enables relationships).
+
+**Response:**
+```json
+[
+  {
+    "from_goal_id": "goal-1-...",
+    "to_goal_id": "goal-2-...",
+    "dep_type": "blocks",
+    "target_title": "Fix auth",
+    "target_status": "active"
+  }
+]
+```
+
+#### `POST /api/goals/:id/dependencies`
+
+Add a dependency relationship between goals.
+
+**Request body:**
+```json
+{
+  "targetGoalId": "goal-2-...",
+  "type": "blocks"
+}
+```
+
+**Response:** `201 Created`
+```json
+{
+  "status": "dependency added"
+}
+```
+
+---
+
+### Server Stats
+
+#### `GET /api/server/stats`
+
+Server operational metrics for monitoring.
+
+**Response:**
+```json
+{
+  "uptime_seconds": 3600,
+  "requests_total": 1420,
+  "errors_total": 3,
+  "sse_clients": 2,
+  "active_goals": 3,
+  "total_goals": 12,
+  "rate_limit_max": 120,
+  "db_connected": true
+}
+```
+
+---
+
+### Metrics Aggregation
+
+#### `GET /api/metrics/hourly`
+
+Pre-aggregated hourly metrics from the rollup table. Faster than computing from raw cost_events.
+
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `hours` | integer | 24 | Lookback window in hours |
+
+#### `POST /api/metrics/aggregate`
+
+Manually trigger metrics aggregation into the `hourly_rollups` table.
+
+**Request body:**
+```json
+{
+  "hours": 2
+}
+```
+
+**Response:**
+```json
+{
+  "status": "aggregated",
+  "rows_affected": 3
+}
+```
+
 ---
 
 ### Cost & Observability

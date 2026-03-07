@@ -190,7 +190,14 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     });
     wsClients.add(res);
     serverMetrics.sseClients = wsClients.size;
+
+    // SSE heartbeat to prevent proxy timeouts (every 30s)
+    const heartbeat = setInterval(() => {
+      try { res.write(":heartbeat\n\n"); } catch { clearInterval(heartbeat); }
+    }, 30_000);
+
     req.on("close", () => {
+      clearInterval(heartbeat);
       wsClients.delete(res);
       serverMetrics.sseClients = wsClients.size;
     });
@@ -500,10 +507,38 @@ start().catch((err) => {
   process.exit(1);
 });
 
-// Graceful shutdown
-process.on("SIGTERM", async () => {
-  console.log("Shutting down...");
-  server.close();
-  if (db) await db.close();
+// Graceful shutdown with connection draining
+async function shutdown(signal: string): Promise<void> {
+  console.log(`${signal} received. Draining connections...`);
+
+  // Close SSE clients gracefully
+  for (const client of wsClients) {
+    try {
+      client.write(`data: ${JSON.stringify({ type: "server-shutdown", data: { reason: signal } })}\n\n`);
+      client.end();
+    } catch { /* ignore */ }
+  }
+  wsClients.clear();
+
+  // Stop accepting new connections
+  server.close(() => {
+    console.log("HTTP server closed.");
+  });
+
+  // Final metrics aggregation before shutdown
+  if (db) {
+    try {
+      await db.aggregateHourlyMetrics(1);
+      console.log("Final metrics aggregation complete.");
+    } catch (err) {
+      console.error("Final aggregation error:", err);
+    }
+    await db.close();
+    console.log("Database connection closed.");
+  }
+
   process.exit(0);
-});
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
