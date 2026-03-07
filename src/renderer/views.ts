@@ -68,33 +68,56 @@ export function renderNeedsYou(): void {
     return;
   }
 
-  feed.innerHTML = state.attentionItems.map(item => `
-    <div class="attention-card ${item.kind}" data-id="${item.id}">
-      <div class="attention-label">${item.label}</div>
-      <div class="attention-title">${item.title}</div>
-      <div class="attention-body">${item.body}</div>
-      <div class="attention-context">${item.context}</div>
-      <div class="attention-actions">
-        ${item.actions.map(a => `<button class="btn ${a.style}" data-action="${a.label}">${a.label}</button>`).join("")}
-      </div>
+  // Sort by urgency: crit > warn > ask
+  const urgencyOrder: Record<string, number> = { crit: 0, warn: 1, ask: 2 };
+  const sorted = [...state.attentionItems].sort((a, b) => (urgencyOrder[a.kind] ?? 3) - (urgencyOrder[b.kind] ?? 3));
+
+  const critCount = sorted.filter(i => i.kind === "crit").length;
+  const warnCount = sorted.filter(i => i.kind === "warn").length;
+  const askCount = sorted.filter(i => i.kind === "ask").length;
+
+  feed.innerHTML = `
+    <div class="graph-stats-bar" style="margin-bottom: 16px;">
+      ${critCount > 0 ? `<div class="graph-stat"><span class="graph-stat-value" style="color:var(--red)">${critCount}</span><span class="graph-stat-label">critical</span></div>` : ""}
+      ${warnCount > 0 ? `<div class="graph-stat"><span class="graph-stat-value" style="color:var(--amber)">${warnCount}</span><span class="graph-stat-label">warning</span></div>` : ""}
+      ${askCount > 0 ? `<div class="graph-stat"><span class="graph-stat-value" style="color:var(--blue)">${askCount}</span><span class="graph-stat-label">decision</span></div>` : ""}
+      <div class="graph-stat"><span class="graph-stat-value">${sorted.length}</span><span class="graph-stat-label">total</span></div>
     </div>
-  `).join("");
+
+    ${sorted.map(item => `
+      <div class="attention-card ${item.kind}" data-id="${item.id}">
+        <div class="attention-label">${item.label}</div>
+        <div class="attention-title">${item.title}</div>
+        <div class="attention-body">${item.body}</div>
+        <div class="attention-context">${item.context}</div>
+        <div class="attention-actions">
+          ${item.actions.map(a => `<button class="btn ${a.style}" data-action="${a.label}">${a.label}</button>`).join("")}
+        </div>
+      </div>
+    `).join("")}
+  `;
 
   feed.querySelectorAll(".btn[data-action]").forEach(btn => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       const card = (e.currentTarget as HTMLElement).closest(".attention-card") as HTMLElement;
       const action = (e.currentTarget as HTMLElement).dataset.action!;
+      const itemId = card.dataset.id!;
       const title = card.querySelector(".attention-title")?.textContent || "";
       card.classList.add("dismissed");
+      // Remove from state after animation
+      setTimeout(() => {
+        state.attentionItems = state.attentionItems.filter(i => i.id !== itemId);
+        const badge = document.getElementById("attention-count");
+        if (badge) {
+          badge.textContent = String(state.attentionItems.length);
+          if (state.attentionItems.length === 0) badge.style.display = "none";
+        }
+        // Re-render if all dismissed
+        if (state.attentionItems.length === 0 && state.currentView === "needs-you") renderNeedsYou();
+      }, 350);
       state.activityLog.unshift({ time: Date.now(), text: `<strong>you</strong> chose "${action}" on "${title}"` });
       showToast("Action taken", `You chose "${action}" on "${title}"`, "var(--accent)");
-      const badge = document.getElementById("attention-count");
-      if (badge) {
-        const remaining = feed.querySelectorAll(".attention-card:not(.dismissed)").length - 1;
-        badge.textContent = String(remaining);
-        if (remaining === 0) badge.style.display = "none";
-      }
     });
   });
 }

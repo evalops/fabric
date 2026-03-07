@@ -165,10 +165,48 @@ function init(): void {
 
   // Keyboard shortcuts
   document.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); openCmdk(); }
-    if (e.key === "Escape") { closeCmdk(); closeDetail(); }
-    if ((e.metaKey || e.ctrlKey) && e.key === "d") { e.preventDefault(); toggleDarkMode(); }
+    // Don't capture shortcuts when typing in inputs
+    const tag = (e.target as HTMLElement)?.tagName;
+    const isInput = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+
+    if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); openCmdk(); return; }
+    if (e.key === "Escape") { closeCmdk(); closeDetail(); dismissShortcutHelp(); return; }
+    if ((e.metaKey || e.ctrlKey) && e.key === "d") { e.preventDefault(); toggleDarkMode(); return; }
+
+    // Number keys for quick nav (only when not typing)
+    if (!isInput && !e.metaKey && !e.ctrlKey) {
+      const numMap: Record<string, string> = { "1": "needs-you", "2": "all-work", "3": "activity", "4": "agents", "5": "graph", "6": "costs", "7": "settings" };
+      if (numMap[e.key]) { e.preventDefault(); switchView(numMap[e.key]); return; }
+      if (e.key === "?") { e.preventDefault(); toggleShortcutHelp(); return; }
+    }
   });
+
+  function toggleShortcutHelp(): void {
+    const existing = document.getElementById("shortcut-help");
+    if (existing) { existing.remove(); return; }
+    const overlay = document.createElement("div");
+    overlay.id = "shortcut-help";
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1100;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);animation:overlayIn 0.15s ease;";
+    overlay.innerHTML = `<div style="background:var(--bg-base);border:1px solid var(--border);border-radius:var(--radius);padding:28px 32px;max-width:420px;box-shadow:var(--shadow-lg);animation:cmdkIn 0.15s ease;">
+      <div style="font-size:16px;font-weight:700;margin-bottom:16px;letter-spacing:-0.3px;">Keyboard Shortcuts</div>
+      <div style="display:grid;grid-template-columns:80px 1fr;gap:8px 16px;font-size:13px;">
+        <kbd style="font-family:var(--font-mono);font-size:11px;padding:2px 6px;background:var(--bg-surface);border:1px solid var(--border);border-radius:4px;text-align:center;">\u2318K</kbd><span style="color:var(--text-secondary);">Command palette</span>
+        <kbd style="font-family:var(--font-mono);font-size:11px;padding:2px 6px;background:var(--bg-surface);border:1px solid var(--border);border-radius:4px;text-align:center;">\u2318D</kbd><span style="color:var(--text-secondary);">Toggle dark mode</span>
+        <kbd style="font-family:var(--font-mono);font-size:11px;padding:2px 6px;background:var(--bg-surface);border:1px solid var(--border);border-radius:4px;text-align:center;">1-7</kbd><span style="color:var(--text-secondary);">Switch views</span>
+        <kbd style="font-family:var(--font-mono);font-size:11px;padding:2px 6px;background:var(--bg-surface);border:1px solid var(--border);border-radius:4px;text-align:center;">Esc</kbd><span style="color:var(--text-secondary);">Close panel/dialog</span>
+        <kbd style="font-family:var(--font-mono);font-size:11px;padding:2px 6px;background:var(--bg-surface);border:1px solid var(--border);border-radius:4px;text-align:center;">?</kbd><span style="color:var(--text-secondary);">This help</span>
+      </div>
+      <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;color:var(--text-muted);">
+        <strong>Command palette tips:</strong> "create: fix bug", "steer: focus on auth", "pause", "resume", "batch: a | b | c", "status"
+      </div>
+    </div>`;
+    overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+  }
+
+  function dismissShortcutHelp(): void {
+    document.getElementById("shortcut-help")?.remove();
+  }
 
   document.getElementById("cmdk-overlay")!.addEventListener("click", (e) => {
     if (e.target === e.currentTarget) closeCmdk();
