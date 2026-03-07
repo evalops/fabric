@@ -257,6 +257,30 @@ Recent activity log entries.
 
 ---
 
+### Steering
+
+#### `POST /api/goals/:id/steer`
+
+Send a steering message to redirect a running goal's agent. The message is injected as additional context after the current tool call completes.
+
+**Request body:**
+```json
+{
+  "message": "Focus on the auth module first, skip the UI changes"
+}
+```
+
+**Response:**
+```json
+{
+  "status": "steering message sent"
+}
+```
+
+**How it works:** Steering messages are queued and delivered via the PostToolUse hook's `additionalContext` field. After the agent's current tool finishes, it sees the human's message and can adjust its approach. This is inspired by pi-mono's dual-queue steering pattern.
+
+---
+
 ### Settings
 
 #### `PUT /api/settings`
