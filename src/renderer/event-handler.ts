@@ -126,6 +126,14 @@ export function handleFabricEvent(event: any): void {
       if (state.currentView === "activity") renderActivity();
       break;
     }
+    case "compaction": {
+      state.activityLog.unshift({
+        time: Date.now(),
+        text: `<strong>compaction</strong> context compressed (${event.data.trigger}, ${Math.round((event.data.preTokens || 0) / 1000)}k tokens, turn ${event.data.turnCount})`,
+      });
+      if (state.currentView === "activity") renderActivity();
+      break;
+    }
     case "attention": {
       state.attentionItems.push(event.data);
       const badge = document.getElementById("attention-count");

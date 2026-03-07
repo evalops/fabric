@@ -63,7 +63,7 @@ export type FabricEventType =
   | "goal-created" | "goal-updated" | "step-updated"
   | "activity" | "attention" | "toast"
   | "agent-message" | "cost-update" | "tool-call"
-  | "observability" | "steering" | "retry";
+  | "observability" | "steering" | "retry" | "compaction";
 
 export interface FabricEvent {
   type: FabricEventType;
@@ -402,6 +402,23 @@ export class FabricEngine extends EventEmitter {
         PostToolUse: [{
           hooks: [this.createPostToolHook(goalId)],
         }],
+        PreCompact: [{
+          hooks: [async (input: any) => {
+            // Log compaction event and emit Fabric context for observability
+            const goal = this.goals.get(goalId);
+            if (!goal) return {};
+            const doneSteps = goal.steps.filter(s => s.state === "done").length;
+            this.emitEvent({
+              type: "activity",
+              goalId,
+              data: {
+                time: Date.now(),
+                text: `<strong>system</strong> compacting context (${input.trigger || "auto"}, ${doneSteps}/${goal.steps.length} steps done, $${goal.costUsd.toFixed(2)} spent)`,
+              },
+            });
+            return {};
+          }],
+        }],
         Notification: [{
           hooks: [async (input: any) => {
             if (input.message) {
@@ -605,6 +622,33 @@ Work in the current directory. Be efficient and focused.${extPromptSnippets ? `\
             toolBreakdown: this.getToolBreakdown(goalId),
           },
         });
+        break;
+      }
+      case "system": {
+        // Handle compaction boundary events
+        const sysMsg = message as any;
+        if (sysMsg.subtype === "compact_boundary") {
+          const preTokens = sysMsg.compact_metadata?.pre_tokens || 0;
+          const trigger = sysMsg.compact_metadata?.trigger || "auto";
+          this.emitEvent({
+            type: "activity",
+            goalId,
+            data: {
+              time: Date.now(),
+              text: `<strong>system</strong> context compacted (${trigger}, ${Math.round(preTokens / 1000)}k tokens before)`,
+            },
+          });
+          this.emitEvent({
+            type: "compaction",
+            goalId,
+            data: {
+              trigger,
+              preTokens,
+              turnCount: goal.turnCount,
+              costAtCompaction: goal.costUsd,
+            },
+          });
+        }
         break;
       }
     }
