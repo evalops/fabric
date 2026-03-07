@@ -160,10 +160,66 @@ function getCmdkActions(query: string): { group: string; items: CmdkAction[] }[]
   if (q.includes("dark") || q.includes("light") || q.includes("theme") || q.includes("mode")) {
     commandActions.push({ icon: state.darkMode ? "\u2600" : "\u263e", text: `Switch to ${state.darkMode ? "light" : "dark"} mode`, hint: "theme", action: () => { closeCmdk(); toggleDarkMode(); } });
   }
+  if (q.includes("cancel") || q.includes("abort") || q.includes("kill")) {
+    const activeGoals = state.goals.filter(g => g.status === "active");
+    activeGoals.forEach(g => {
+      commandActions.push({
+        icon: "\u2717",
+        text: `Cancel "${g.title}"`,
+        hint: `${Math.round(g.progress)}%`,
+        action: () => {
+          closeCmdk();
+          const bridge = (window as any).fabric;
+          if (bridge?.cancelGoal) bridge.cancelGoal(g.id);
+          g.status = "failed";
+          g.outcome = "user_abort";
+          showToast("Goal cancelled", `"${g.title}" has been cancelled`, "var(--red)");
+          state.activityLog.unshift({ time: Date.now(), text: `<strong>you</strong> cancelled "${g.title}"` });
+        },
+      });
+    });
+  }
   if (q.includes("agent") && !q.includes("how")) {
     const matchedAgents = state.agents.filter(a => a.name.includes(q.replace("agent", "").trim()) || q === "agent" || q === "agents");
     matchedAgents.slice(0, 5).forEach(a => {
       commandActions.push({ icon: a.status === "working" ? "\u25cf" : "\u25cb", text: a.name, hint: a.status, action: () => { closeCmdk(); callbacks.openAgentDetail(a.id); } });
+    });
+  }
+  if (q.includes("export") || q.includes("download") || q.includes("report")) {
+    commandActions.push({
+      icon: "\u2913",
+      text: "Export activity log (JSON)",
+      hint: `${state.activityLog.length} entries`,
+      action: () => {
+        closeCmdk();
+        const data = JSON.stringify(state.activityLog, null, 2);
+        const blob = new Blob([data], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = `fabric-activity-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click(); URL.revokeObjectURL(url);
+        showToast("Exported", "Activity log saved", "var(--accent)");
+      },
+    });
+    commandActions.push({
+      icon: "\u2913",
+      text: "Export cost report (JSON)",
+      hint: `$${getTotalCost().toFixed(2)} total`,
+      action: () => {
+        closeCmdk();
+        const report = state.goals.map(g => ({
+          id: g.id, title: g.title, status: g.status, costUsd: g.costUsd,
+          inputTokens: g.inputTokens, outputTokens: g.outputTokens,
+          turnCount: g.turnCount, outcome: g.outcome,
+          duration: (g.completedAt || Date.now()) - g.startedAt,
+        }));
+        const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = `fabric-costs-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click(); URL.revokeObjectURL(url);
+        showToast("Exported", "Cost report saved", "var(--accent)");
+      },
     });
   }
 

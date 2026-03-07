@@ -43,6 +43,25 @@ export function renderTitleStatus(): void {
 export function renderSidebarGoals(): void {
   const container = document.getElementById("sidebar-goals");
   if (!container) return;
+
+  // Render mini stats bar (progress distribution)
+  const statsEl = document.getElementById("sidebar-goal-stats");
+  if (statsEl && state.goals.length > 0) {
+    const total = state.goals.length;
+    const active = state.goals.filter(g => g.status === "active").length;
+    const complete = state.goals.filter(g => g.status === "complete").length;
+    const blocked = state.goals.filter(g => g.status === "blocked").length;
+    const failed = state.goals.filter(g => g.status === "failed").length;
+    statsEl.innerHTML = [
+      { count: complete, color: "var(--green)" },
+      { count: active, color: "var(--blue)" },
+      { count: blocked, color: "var(--amber)" },
+      { count: failed, color: "var(--red)" },
+    ].filter(s => s.count > 0).map(s =>
+      `<div class="sidebar-goal-stats-seg" style="width: ${(s.count / total) * 100}%; background: ${s.color};"></div>`
+    ).join("");
+  }
+
   const ringCircumference = 2 * Math.PI * 7;
 
   container.innerHTML = state.goals.map(g => {
