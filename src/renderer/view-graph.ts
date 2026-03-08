@@ -1,5 +1,5 @@
 import { state } from './state';
-import { stringToColor, debounce } from './utils';
+import { stringToColor, debounce, formatTokens, formatDuration } from './utils';
 import { openGoalDetail, openAgentDetail } from './detail-panels';
 import type { Goal, GoalStatus } from './types';
 
@@ -8,6 +8,8 @@ import type { Goal, GoalStatus } from './types';
 type LayoutMode = "dependency" | "timeline" | "cost-map";
 type NodeSizeMode = "uniform" | "cost" | "turns" | "tokens";
 type GroupMode = "none" | "status" | "area" | "batch";
+
+let prevGraphKeyHandler: ((e: KeyboardEvent) => void) | null = null;
 
 const graphState = {
   layout: "dependency" as LayoutMode,
@@ -18,6 +20,13 @@ const graphState = {
   showDepEdges: true,
   showAreaEdges: false,
   searchQuery: "",
+  // Pan & zoom
+  zoom: 1,
+  panX: 0,
+  panY: 0,
+  // Focus mode
+  focusNodeId: null as string | null,
+  focusDepth: 2,
 };
 
 // ── Helper types ─────────────────────────────────────
@@ -114,7 +123,6 @@ function renderNode(n: GNode): string {
     ? `<text x="${n.x + 36}" y="${n.y + 38}" font-size="10" fill="var(--text-muted)" font-family="var(--font-sans)">${subtitleParts.join(" \u00b7 ")}</text>`
     : "";
 
-  // Opacity is controlled by CSS/JS hover handlers — render at base opacity
   const opacity = n.status === "complete" ? 0.8 : 1;
 
   return `
@@ -152,23 +160,25 @@ function renderDepEdge(from: GNode, to: GNode, depType: string): string {
   const dash = depType === "shares-area" ? "4,4" : "none";
   const marker = depType === "blocks" ? "arrow-amber" : depType === "enables" ? "arrow-green" : "arrowhead";
   const midY = (y1 + y2) / 2;
+  const labelText = depType === "blocks" ? "blocks" : depType === "enables" ? "enables" : "shared";
+  const labelX = (x1 + x2) / 2 + 6;
+  const labelY = midY - 4;
   return `<path d="M${x1},${y1} C${x1},${midY} ${x2},${midY} ${x2},${y2}"
     fill="none" stroke="${color}" stroke-width="1.5" stroke-dasharray="${dash}"
     opacity="0.7" marker-end="url(#${marker})" class="graph-edge"
-    style="transition: opacity 0.2s;" />`;
+    style="transition: opacity 0.2s;" />
+    <text x="${labelX}" y="${labelY}" class="graph-edge-label" fill="${color}">${labelText}</text>`;
 }
 
 // ── Layout engines ───────────────────────────────────
 
 function layoutDependency(goals: Goal[], nodes: GNode[], edges: GEdge[], depEdges: GDepEdge[]): void {
-  // Group goals
   const groups = groupGoals(goals);
   let globalRow = 0;
 
   groups.forEach((group, gi) => {
-    // Group header offset
     if (graphState.groupBy !== "none" && groups.length > 1) {
-      globalRow += (gi > 0 ? 1 : 0); // extra gap between groups
+      globalRow += (gi > 0 ? 1 : 0);
     }
 
     group.goals.forEach((goal) => {
@@ -251,7 +261,6 @@ function layoutDependency(goals: Goal[], nodes: GNode[], edges: GEdge[], depEdge
 }
 
 function layoutTimeline(goals: Goal[], nodes: GNode[]): void {
-  // Sort by startedAt, lay out on a horizontal timeline
   const sorted = [...goals].sort((a, b) => a.startedAt - b.startedAt);
   if (sorted.length === 0) return;
 
@@ -259,8 +268,6 @@ function layoutTimeline(goals: Goal[], nodes: GNode[]): void {
   const maxTime = Math.max(...sorted.map(g => g.completedAt || Date.now()));
   const timeSpan = maxTime - minTime || 1;
   const svgWidth = Math.max(800, sorted.length * 140);
-
-  // Swim lanes by status to avoid overlap
   const lanes: { goalId: string; end: number }[][] = [];
 
   sorted.forEach((goal) => {
@@ -268,19 +275,14 @@ function layoutTimeline(goals: Goal[], nodes: GNode[]): void {
     const endTime = goal.completedAt || Date.now();
     const barWidth = Math.max(BASE_NODE_W, ((endTime - goal.startedAt) / timeSpan) * (svgWidth - PAD_X * 2 - BASE_NODE_W));
 
-    // Find a lane
     let laneIdx = lanes.findIndex(lane => lane.every(item => startX > item.end + 10));
-    if (laneIdx === -1) {
-      laneIdx = lanes.length;
-      lanes.push([]);
-    }
+    if (laneIdx === -1) { laneIdx = lanes.length; lanes.push([]); }
     lanes[laneIdx].push({ goalId: goal.id, end: startX + barWidth });
 
     const statusColors: Record<string, string> = {
       active: "var(--blue)", complete: "var(--green)",
       blocked: "var(--amber)", failed: "var(--red)",
     };
-
     const dim = getNodeDimensions({ costUsd: goal.costUsd, turnCount: goal.turnCount, tokenCount: goal.inputTokens + goal.outputTokens } as any);
     nodes.push({
       id: goal.id, label: goal.title, type: "goal", status: goal.status as GoalStatus,
@@ -298,34 +300,26 @@ function layoutTimeline(goals: Goal[], nodes: GNode[]): void {
 }
 
 function layoutCostMap(goals: Goal[], nodes: GNode[]): void {
-  // Treemap-style layout: area proportional to cost
   const sorted = [...goals].sort((a, b) => b.costUsd - a.costUsd);
   const totalCost = sorted.reduce((s, g) => s + g.costUsd, 0) || 1;
   const mapW = 700;
   const mapH = 400;
-
   let curX = PAD_X;
   let curY = PAD_Y;
   let rowH = 0;
-  const maxRowW = mapW;
 
   sorted.forEach((goal) => {
     const fraction = goal.costUsd / totalCost;
     const area = fraction * mapW * mapH;
-    const nodeW = Math.max(120, Math.min(maxRowW, Math.sqrt(area * 1.6)));
+    const nodeW = Math.max(120, Math.min(mapW, Math.sqrt(area * 1.6)));
     const nodeH = Math.max(50, area / nodeW);
 
-    if (curX + nodeW > PAD_X + maxRowW) {
-      curX = PAD_X;
-      curY += rowH + 8;
-      rowH = 0;
-    }
+    if (curX + nodeW > PAD_X + mapW) { curX = PAD_X; curY += rowH + 8; rowH = 0; }
 
     const statusColors: Record<string, string> = {
       active: "var(--blue)", complete: "var(--green)",
       blocked: "var(--amber)", failed: "var(--red)",
     };
-
     nodes.push({
       id: goal.id, label: goal.title, type: "goal", status: goal.status as GoalStatus,
       progress: goal.progress, outcome: goal.outcome, retryCount: goal.retryCount,
@@ -338,7 +332,6 @@ function layoutCostMap(goals: Goal[], nodes: GNode[]): void {
       color: statusColors[goal.status] || "var(--blue)",
       goalRef: goal,
     });
-
     curX += nodeW + 8;
     rowH = Math.max(rowH, nodeH);
   });
@@ -346,14 +339,10 @@ function layoutCostMap(goals: Goal[], nodes: GNode[]): void {
 
 // ── Grouping ─────────────────────────────────────────
 
-interface GoalGroup {
-  label: string;
-  goals: Goal[];
-}
+interface GoalGroup { label: string; goals: Goal[]; }
 
 function groupGoals(goals: Goal[]): GoalGroup[] {
   if (graphState.groupBy === "none") return [{ label: "", goals }];
-
   const map = new Map<string, Goal[]>();
   goals.forEach(g => {
     let key: string;
@@ -366,7 +355,6 @@ function groupGoals(goals: Goal[]): GoalGroup[] {
     if (!map.has(key)) map.set(key, []);
     map.get(key)!.push(g);
   });
-
   return [...map.entries()].map(([label, goals]) => ({ label, goals }));
 }
 
@@ -479,6 +467,8 @@ function renderLegend(): string {
     <div class="graph-legend-item"><span class="graph-legend-line" style="background: var(--amber)"></span> Blocks</div>
     <div class="graph-legend-item"><span class="graph-legend-line" style="background: var(--green)"></span> Enables</div>
     <div class="graph-legend-item"><span class="graph-legend-line graph-legend-dash" style="background: var(--border-lit)"></span> Shared area</div>
+    <div class="graph-legend-divider"></div>
+    <span style="font-size: 10px; color: var(--text-muted);">Scroll to zoom \u00b7 Drag to pan \u00b7 Dbl-click to focus</span>
   </div>`;
 }
 
@@ -486,7 +476,6 @@ function renderLegend(): string {
 
 function renderGroupHeaders(groups: GoalGroup[], nodes: GNode[]): string {
   if (graphState.groupBy === "none" || groups.length <= 1) return "";
-
   return groups.map(group => {
     const groupNodes = nodes.filter(n => n.goalRef && group.goals.some(g => g.id === n.id));
     if (groupNodes.length === 0) return "";
@@ -495,6 +484,82 @@ function renderGroupHeaders(groups: GoalGroup[], nodes: GNode[]): string {
       font-family="var(--font-sans)" font-weight="600" text-transform="uppercase"
       letter-spacing="0.5">${group.label.toUpperCase()}</text>`;
   }).join("");
+}
+
+// ── Focus mode helpers ────────────────────────────────
+
+function getNeighborhood(nodeId: string, edges: GEdge[], depEdges: GDepEdge[], depth: number): Set<string> {
+  const visited = new Set<string>([nodeId]);
+  let frontier = [nodeId];
+  for (let d = 0; d < depth; d++) {
+    const next: string[] = [];
+    for (const id of frontier) {
+      for (const e of edges) {
+        if (e.from === id && !visited.has(e.to)) { visited.add(e.to); next.push(e.to); }
+        if (e.to === id && !visited.has(e.from)) { visited.add(e.from); next.push(e.from); }
+      }
+      for (const e of depEdges) {
+        if (e.from === id && !visited.has(e.to)) { visited.add(e.to); next.push(e.to); }
+        if (e.to === id && !visited.has(e.from)) { visited.add(e.from); next.push(e.from); }
+      }
+    }
+    frontier = next;
+    if (next.length === 0) break;
+  }
+  return visited;
+}
+
+// ── Tooltip content builder ──────────────────────────
+
+function buildTooltipHtml(n: GNode): string {
+  if (n.type === "agent") {
+    const agent = state.agents.find(a => a.name === n.label);
+    return `<div class="graph-tooltip-title">${n.label}</div>
+      <div class="graph-tooltip-row"><span class="tt-label">Status</span><span class="tt-value">${agent?.status || "unknown"}</span></div>
+      <div class="graph-tooltip-row"><span class="tt-label">Tasks</span><span class="tt-value">${agent?.tasksCompleted || 0}</span></div>
+      <div class="graph-tooltip-row"><span class="tt-label">Success</span><span class="tt-value">${agent?.successRate || 0}%</span></div>`;
+  }
+  const g = n.goalRef;
+  if (!g) return `<div class="graph-tooltip-title">${n.label}</div>`;
+
+  const doneSteps = g.steps.filter(s => s.state === "done").length;
+  const toolErrors = g.toolCalls.filter(tc => !tc.success).length;
+
+  return `<div class="graph-tooltip-title">${g.title}</div>
+    <div class="graph-tooltip-row"><span class="tt-label">Status</span><span class="tt-value" style="color:${n.color}">${g.status}${g.outcome ? " \u00b7 " + g.outcome.replace(/_/g, " ") : ""}</span></div>
+    <div class="graph-tooltip-row"><span class="tt-label">Progress</span><span class="tt-value">${Math.round(g.progress)}%</span></div>
+    <div class="graph-tooltip-bar"><div class="graph-tooltip-bar-fill" style="width:${g.progress}%;background:${n.color}"></div></div>
+    <div class="graph-tooltip-row"><span class="tt-label">Cost</span><span class="tt-value">$${g.costUsd.toFixed(2)}</span></div>
+    <div class="graph-tooltip-row"><span class="tt-label">Tokens</span><span class="tt-value">${formatTokens(g.inputTokens + g.outputTokens)}</span></div>
+    <div class="graph-tooltip-row"><span class="tt-label">Steps</span><span class="tt-value">${doneSteps}/${g.steps.length}</span></div>
+    <div class="graph-tooltip-row"><span class="tt-label">Turns</span><span class="tt-value">${g.turnCount}</span></div>
+    <div class="graph-tooltip-row"><span class="tt-label">Tools</span><span class="tt-value">${g.toolCalls.length}${toolErrors > 0 ? ` (${toolErrors} err)` : ""}</span></div>
+    ${g.retryCount > 0 ? `<div class="graph-tooltip-row"><span class="tt-label">Retries</span><span class="tt-value" style="color:var(--amber)">${g.retryCount}</span></div>` : ""}
+    <div class="graph-tooltip-row"><span class="tt-label">Duration</span><span class="tt-value">${formatDuration(g.startedAt, g.completedAt)}</span></div>
+    ${g.steps.length > 0 ? `<div class="graph-tooltip-steps">${g.steps.map(s => {
+      const c = s.state === "done" ? "var(--green)" : s.state === "running" ? "var(--blue)" : s.state === "failed" ? "var(--red)" : "var(--border)";
+      return `<div class="graph-tooltip-step" style="background:${c}" title="${s.name}: ${s.state}"></div>`;
+    }).join("")}</div>` : ""}`;
+}
+
+// ── Minimap renderer ─────────────────────────────────
+
+function renderMinimapSvg(nodes: GNode[], svgW: number, svgH: number): string {
+  if (nodes.length === 0) return "";
+  const mmW = 136;
+  const mmH = 86;
+  const scaleX = mmW / svgW;
+  const scaleY = mmH / svgH;
+  const scale = Math.min(scaleX, scaleY);
+  return `<svg width="${mmW}" height="${mmH}" viewBox="0 0 ${mmW} ${mmH}">
+    ${nodes.map(n => {
+      const x = n.x * scale;
+      const y = n.y * scale;
+      const w = Math.max(2, n.w * scale);
+      const h = Math.max(2, n.h * scale);
+      return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="1" fill="${n.color}" opacity="0.7" />`;
+    }).join("")}
+  </svg>`;
 }
 
 // ── Main render ──────────────────────────────────────
@@ -517,26 +582,25 @@ export function renderGraph(): void {
   const edges: GEdge[] = [];
   const depEdges: GDepEdge[] = [];
 
-  // Apply layout
   switch (graphState.layout) {
-    case "dependency":
-      layoutDependency(filteredGoals, nodes, edges, depEdges);
-      break;
-    case "timeline":
-      layoutTimeline(filteredGoals, nodes);
-      break;
-    case "cost-map":
-      layoutCostMap(filteredGoals, nodes);
-      break;
+    case "dependency": layoutDependency(filteredGoals, nodes, edges, depEdges); break;
+    case "timeline": layoutTimeline(filteredGoals, nodes); break;
+    case "cost-map": layoutCostMap(filteredGoals, nodes); break;
   }
 
-  // Calculate SVG dimensions
+  // Focus mode — determine neighborhood
+  let focusNeighborhood: Set<string> | null = null;
+  const focusNode = graphState.focusNodeId ? nodes.find(n => n.id === graphState.focusNodeId) : null;
+  if (graphState.focusNodeId && focusNode) {
+    focusNeighborhood = getNeighborhood(graphState.focusNodeId, edges, depEdges, graphState.focusDepth);
+  }
+
+  // SVG dimensions
   const maxX = Math.max(600, ...nodes.map(n => n.x + n.w));
   const maxY = Math.max(300, ...nodes.map(n => n.y + n.h));
   const svgW = maxX + PAD_X;
   const svgH = maxY + PAD_Y + 20;
   const nodeMap = new Map(nodes.map(n => [n.id, n]));
-
   const groups = groupGoals(filteredGoals);
 
   // Timeline axis
@@ -558,49 +622,77 @@ export function renderGraph(): void {
     timelineAxis = axisLabels.join("");
   }
 
+  // Focus mode bar
+  const focusBar = focusNode ? `
+    <div class="graph-focus-bar">
+      <span class="focus-label">Focus</span>
+      <span class="focus-title">${focusNode.label}</span>
+      <span class="focus-depth">
+        Depth <input type="range" id="focus-depth" min="1" max="5" value="${graphState.focusDepth}" />
+        <span id="focus-depth-val">${graphState.focusDepth}</span>
+      </span>
+      <button class="focus-exit" id="focus-exit">Exit focus</button>
+    </div>
+  ` : "";
+
+  const isInFocus = (id: string) => !focusNeighborhood || focusNeighborhood.has(id);
+
   feed.innerHTML = `
     ${renderToolbar()}
     ${renderStatsBar(filteredGoals)}
-    <div class="graph-container">
-      <svg class="graph-svg" viewBox="0 0 ${svgW} ${svgH}" width="100%" style="max-height: calc(100vh - 280px);">
-        <defs>
-          <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-            <polygon points="0 0, 8 3, 0 6" fill="var(--border-lit)" />
-          </marker>
-          <marker id="arrow-amber" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-            <polygon points="0 0, 8 3, 0 6" fill="var(--amber)" opacity="0.7" />
-          </marker>
-          <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-            <polygon points="0 0, 8 3, 0 6" fill="var(--green)" opacity="0.7" />
-          </marker>
-        </defs>
+    ${focusBar}
+    <div class="graph-container" id="graph-container">
+      <svg class="graph-svg" id="graph-svg" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">
+        <g id="graph-world" transform="translate(${graphState.panX},${graphState.panY}) scale(${graphState.zoom})">
+          <defs>
+            <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="var(--border-lit)" />
+            </marker>
+            <marker id="arrow-amber" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="var(--amber)" opacity="0.7" />
+            </marker>
+            <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="var(--green)" opacity="0.7" />
+            </marker>
+          </defs>
 
-        ${timelineAxis}
-        ${renderGroupHeaders(groups, nodes)}
+          ${timelineAxis}
+          ${renderGroupHeaders(groups, nodes)}
 
-        ${graphState.showDepEdges ? depEdges.map(e => {
-          const from = nodeMap.get(e.from);
-          const to = nodeMap.get(e.to);
-          if (!from || !to) return "";
-          return renderDepEdge(from, to, e.depType);
-        }).join("") : ""}
+          ${graphState.showDepEdges ? depEdges.map(e => {
+            const from = nodeMap.get(e.from);
+            const to = nodeMap.get(e.to);
+            if (!from || !to) return "";
+            return renderDepEdge(from, to, e.depType);
+          }).join("") : ""}
 
-        ${edges.map(e => {
-          const from = nodeMap.get(e.from);
-          const to = nodeMap.get(e.to);
-          if (!from || !to) return "";
-          return renderEdge(from, to, "var(--border-lit)", "none", "arrowhead");
-        }).join("")}
+          ${edges.map(e => {
+            const from = nodeMap.get(e.from);
+            const to = nodeMap.get(e.to);
+            if (!from || !to) return "";
+            return renderEdge(from, to, "var(--border-lit)", "none", "arrowhead");
+          }).join("")}
 
-        ${nodes.map(n => renderNode(n)).join("")}
+          ${nodes.map(n => renderNode(n)).join("")}
+        </g>
       </svg>
+      <div class="graph-tooltip" id="graph-tooltip"></div>
+      <div class="graph-minimap" id="graph-minimap">
+        ${renderMinimapSvg(nodes, svgW, svgH)}
+        <div class="graph-minimap-viewport" id="minimap-viewport"></div>
+      </div>
+      <div class="graph-zoom-controls">
+        <button class="graph-zoom-btn" id="zoom-in" title="Zoom in (+)">+</button>
+        <div class="graph-zoom-level" id="zoom-level">${Math.round(graphState.zoom * 100)}%</div>
+        <button class="graph-zoom-btn" id="zoom-out" title="Zoom out (-)">&#x2212;</button>
+        <button class="graph-zoom-btn" id="zoom-fit" title="Fit all (0)" style="font-size: 11px; margin-top: 4px; border-radius: var(--radius-xs);">Fit</button>
+      </div>
     </div>
     ${renderLegend()}
   `;
 
   // ── Wire interactions ────────────────────────────
 
-  // Build edge lookup for hover highlighting (avoids full re-render)
   const edgeLookup = new Map<string, Set<string>>();
   const addEdgeLink = (a: string, b: string) => {
     if (!edgeLookup.has(a)) edgeLookup.set(a, new Set());
@@ -613,8 +705,121 @@ export function renderGraph(): void {
 
   const allNodeEls = feed.querySelectorAll(".graph-node");
   const allEdgeEls = feed.querySelectorAll(".graph-edge");
+  const tooltip = document.getElementById("graph-tooltip")!;
+  const container = document.getElementById("graph-container")!;
+  const worldG = document.getElementById("graph-world")!;
 
-  // Node click → detail panel
+  // Apply focus dimming
+  if (focusNeighborhood) {
+    allNodeEls.forEach(n => {
+      if (!isInFocus((n as HTMLElement).dataset.id!)) (n as SVGGElement).setAttribute("opacity", "0.12");
+    });
+    allEdgeEls.forEach(e => (e as SVGElement).setAttribute("opacity", "0.06"));
+  }
+
+  // ── Pan & Zoom ────────────────────────────────
+
+  function applyTransform(): void {
+    worldG.setAttribute("transform", `translate(${graphState.panX},${graphState.panY}) scale(${graphState.zoom})`);
+    const zoomLabel = document.getElementById("zoom-level");
+    if (zoomLabel) zoomLabel.textContent = `${Math.round(graphState.zoom * 100)}%`;
+    updateMinimapViewport();
+  }
+
+  function zoomBy(delta: number, cx?: number, cy?: number): void {
+    const oldZoom = graphState.zoom;
+    graphState.zoom = Math.max(0.2, Math.min(5, graphState.zoom + delta));
+    if (cx !== undefined && cy !== undefined) {
+      const ratio = graphState.zoom / oldZoom;
+      graphState.panX = cx - ratio * (cx - graphState.panX);
+      graphState.panY = cy - ratio * (cy - graphState.panY);
+    }
+    applyTransform();
+  }
+
+  function fitAll(): void {
+    const rect = container.getBoundingClientRect();
+    if (nodes.length === 0) return;
+    graphState.zoom = Math.min(rect.width / svgW, rect.height / svgH, 1.5) * 0.9;
+    graphState.panX = (rect.width - svgW * graphState.zoom) / 2;
+    graphState.panY = (rect.height - svgH * graphState.zoom) / 2;
+    applyTransform();
+  }
+
+  function updateMinimapViewport(): void {
+    const vp = document.getElementById("minimap-viewport");
+    if (!vp) return;
+    const mmW = 136, mmH = 86;
+    const scale = Math.min(mmW / svgW, mmH / svgH);
+    const cRect = container.getBoundingClientRect();
+    const vpX = (-graphState.panX / graphState.zoom) * scale;
+    const vpY = (-graphState.panY / graphState.zoom) * scale;
+    const vpW = (cRect.width / graphState.zoom) * scale;
+    const vpH = (cRect.height / graphState.zoom) * scale;
+    vp.style.left = `${Math.max(0, vpX)}px`;
+    vp.style.top = `${Math.max(0, vpY)}px`;
+    vp.style.width = `${Math.min(mmW, vpW)}px`;
+    vp.style.height = `${Math.min(mmH, vpH)}px`;
+  }
+
+  // Wheel zoom
+  container.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -0.1 : 0.1;
+    const rect = container.getBoundingClientRect();
+    zoomBy(delta, e.clientX - rect.left, e.clientY - rect.top);
+  }, { passive: false });
+
+  // Drag to pan
+  let isPanning = false;
+  let panStartX = 0, panStartY = 0, panStartPX = 0, panStartPY = 0;
+
+  container.addEventListener("pointerdown", (e) => {
+    const target = e.target as HTMLElement;
+    if (target.closest(".graph-node") || target.closest(".graph-zoom-controls") || target.closest(".graph-minimap")) return;
+    isPanning = true;
+    panStartX = e.clientX; panStartY = e.clientY;
+    panStartPX = graphState.panX; panStartPY = graphState.panY;
+    container.classList.add("panning");
+    container.setPointerCapture(e.pointerId);
+  });
+  container.addEventListener("pointermove", (e) => {
+    if (!isPanning) return;
+    graphState.panX = panStartPX + (e.clientX - panStartX);
+    graphState.panY = panStartPY + (e.clientY - panStartY);
+    applyTransform();
+  });
+  container.addEventListener("pointerup", (e) => {
+    if (!isPanning) return;
+    isPanning = false;
+    container.classList.remove("panning");
+    if (container.hasPointerCapture(e.pointerId)) container.releasePointerCapture(e.pointerId);
+  });
+
+  // Zoom buttons
+  document.getElementById("zoom-in")?.addEventListener("click", () => zoomBy(0.2));
+  document.getElementById("zoom-out")?.addEventListener("click", () => zoomBy(-0.2));
+  document.getElementById("zoom-fit")?.addEventListener("click", fitAll);
+
+  // Minimap click-to-pan
+  const minimap = document.getElementById("graph-minimap");
+  if (minimap) {
+    minimap.addEventListener("click", (e) => {
+      const mmRect = minimap.getBoundingClientRect();
+      const scale = Math.min(136 / svgW, 86 / svgH);
+      const clickX = (e.clientX - mmRect.left) / scale;
+      const clickY = (e.clientY - mmRect.top) / scale;
+      const cRect = container.getBoundingClientRect();
+      graphState.panX = -(clickX * graphState.zoom - cRect.width / 2);
+      graphState.panY = -(clickY * graphState.zoom - cRect.height / 2);
+      applyTransform();
+    });
+  }
+
+  requestAnimationFrame(updateMinimapViewport);
+
+  // ── Node interactions ────────────────────────────
+
   allNodeEls.forEach(el => {
     el.addEventListener("click", () => {
       const id = (el as HTMLElement).dataset.id!;
@@ -627,32 +832,71 @@ export function renderGraph(): void {
       }
     });
 
-    // Hover highlight — DOM-only opacity changes, no full re-render
+    // Double click → focus mode
+    el.addEventListener("dblclick", (e) => {
+      e.stopPropagation();
+      const id = (el as HTMLElement).dataset.id!;
+      graphState.focusNodeId = graphState.focusNodeId === id ? null : id;
+      renderGraph();
+    });
+
+    // Hover → tooltip + highlight
     el.addEventListener("mouseenter", () => {
       const hovId = (el as HTMLElement).dataset.id!;
+      const node = nodes.find(n => n.id === hovId);
+      if (node) {
+        tooltip.innerHTML = buildTooltipHtml(node);
+        tooltip.classList.add("visible");
+        const cRect = container.getBoundingClientRect();
+        const elRect = (el as SVGGElement).getBoundingClientRect();
+        let tx = elRect.right - cRect.left + 8;
+        let ty = elRect.top - cRect.top;
+        if (tx + 280 > cRect.width) tx = elRect.left - cRect.left - 288;
+        if (ty + 200 > cRect.height) ty = cRect.height - 210;
+        tooltip.style.left = `${Math.max(4, tx)}px`;
+        tooltip.style.top = `${Math.max(4, ty)}px`;
+      }
       const connected = edgeLookup.get(hovId) || new Set<string>();
       allNodeEls.forEach(n => {
         const nId = (n as HTMLElement).dataset.id!;
-        (n as SVGGElement).setAttribute("opacity", nId === hovId || connected.has(nId) ? "1" : "0.25");
+        const inFocus = isInFocus(nId);
+        (n as SVGGElement).setAttribute("opacity", nId === hovId || connected.has(nId) ? "1" : inFocus ? "0.25" : "0.08");
       });
-      allEdgeEls.forEach(e => {
-        (e as SVGElement).setAttribute("opacity", "0.08");
-      });
+      allEdgeEls.forEach(edge => (edge as SVGElement).setAttribute("opacity", "0.08"));
     });
     el.addEventListener("mouseleave", () => {
+      tooltip.classList.remove("visible");
       allNodeEls.forEach(n => {
-        const goalNode = nodes.find(nd => nd.id === (n as HTMLElement).dataset.id);
-        (n as SVGGElement).setAttribute("opacity", goalNode?.status === "complete" ? "0.8" : "1");
+        const nId = (n as HTMLElement).dataset.id!;
+        const goalNode = nodes.find(nd => nd.id === nId);
+        const inFocus = isInFocus(nId);
+        (n as SVGGElement).setAttribute("opacity", !inFocus ? "0.12" : goalNode?.status === "complete" ? "0.8" : "1");
       });
-      allEdgeEls.forEach(e => {
-        (e as SVGElement).setAttribute("opacity", "0.7");
-      });
+      allEdgeEls.forEach(edge => (edge as SVGElement).setAttribute("opacity", focusNeighborhood ? "0.06" : "0.7"));
     });
   });
 
-  // Toolbar controls
+  // ── Focus mode controls ────────────────────────
+
+  document.getElementById("focus-exit")?.addEventListener("click", () => {
+    graphState.focusNodeId = null;
+    renderGraph();
+  });
+  const depthSlider = document.getElementById("focus-depth") as HTMLInputElement | null;
+  if (depthSlider) {
+    depthSlider.addEventListener("input", () => {
+      graphState.focusDepth = parseInt(depthSlider.value);
+      const depthLabel = document.getElementById("focus-depth-val");
+      if (depthLabel) depthLabel.textContent = depthSlider.value;
+      renderGraph();
+    });
+  }
+
+  // ── Toolbar controls ────────────────────────────
+
   (document.getElementById("graph-layout") as HTMLSelectElement)?.addEventListener("change", (e) => {
     graphState.layout = (e.target as HTMLSelectElement).value as LayoutMode;
+    graphState.panX = 0; graphState.panY = 0; graphState.zoom = 1;
     renderGraph();
   });
   (document.getElementById("graph-node-size") as HTMLSelectElement)?.addEventListener("change", (e) => {
@@ -664,7 +908,6 @@ export function renderGraph(): void {
     renderGraph();
   });
 
-  // Search (debounced to avoid re-rendering SVG on every keystroke)
   const searchInput = document.getElementById("graph-search") as HTMLInputElement;
   const debouncedGraphSearch = debounce(() => {
     graphState.searchQuery = searchInput.value;
@@ -672,30 +915,42 @@ export function renderGraph(): void {
   }, 200);
   searchInput?.addEventListener("input", debouncedGraphSearch);
 
-  // Status filter buttons
   feed.querySelectorAll(".graph-status-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       const status = (btn as HTMLElement).dataset.status as GoalStatus;
-      if (graphState.statusFilter.has(status)) {
-        graphState.statusFilter.delete(status);
-      } else {
-        graphState.statusFilter.add(status);
-      }
+      if (graphState.statusFilter.has(status)) graphState.statusFilter.delete(status);
+      else graphState.statusFilter.add(status);
       renderGraph();
     });
   });
 
-  // Toggle checkboxes
   (document.getElementById("graph-show-agents") as HTMLInputElement)?.addEventListener("change", (e) => {
-    graphState.showAgents = (e.target as HTMLInputElement).checked;
-    renderGraph();
+    graphState.showAgents = (e.target as HTMLInputElement).checked; renderGraph();
   });
   (document.getElementById("graph-show-deps") as HTMLInputElement)?.addEventListener("change", (e) => {
-    graphState.showDepEdges = (e.target as HTMLInputElement).checked;
-    renderGraph();
+    graphState.showDepEdges = (e.target as HTMLInputElement).checked; renderGraph();
   });
   (document.getElementById("graph-show-areas") as HTMLInputElement)?.addEventListener("change", (e) => {
-    graphState.showAreaEdges = (e.target as HTMLInputElement).checked;
-    renderGraph();
+    graphState.showAreaEdges = (e.target as HTMLInputElement).checked; renderGraph();
   });
+
+  // ── Keyboard shortcuts (cleanup previous listener to avoid leaks) ──
+
+  if (prevGraphKeyHandler) document.removeEventListener("keydown", prevGraphKeyHandler);
+  prevGraphKeyHandler = (e: KeyboardEvent) => {
+    if (state.currentView !== "graph") return;
+    const tag = (e.target as HTMLElement)?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    if (e.key === "=" || e.key === "+") { e.preventDefault(); zoomBy(0.15); }
+    else if (e.key === "-") { e.preventDefault(); zoomBy(-0.15); }
+    else if (e.key === "0") { e.preventDefault(); graphState.zoom = 1; graphState.panX = 0; graphState.panY = 0; applyTransform(); }
+    else if (e.key === "f" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); fitAll(); }
+    else if (e.key === "Escape" && graphState.focusNodeId) { e.preventDefault(); graphState.focusNodeId = null; renderGraph(); }
+  };
+  document.addEventListener("keydown", prevGraphKeyHandler);
+
+  // Auto-fit on first render with many nodes
+  if (nodes.length > 4 && graphState.zoom === 1 && graphState.panX === 0 && graphState.panY === 0) {
+    requestAnimationFrame(fitAll);
+  }
 }
