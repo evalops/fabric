@@ -227,11 +227,12 @@ function init(): void {
     }
   }
 
-  // Refresh sidebar elapsed times every second (for active goals)
+  // Refresh sidebar elapsed times periodically (only when there are active goals)
   setInterval(() => {
-    renderSidebarGoals();
+    const hasActive = state.goals.some(g => g.status === "active");
+    if (hasActive) renderSidebarGoals();
     updateFooter();
-  }, 1000);
+  }, 2000);
 
   // Sidebar nav
   document.querySelectorAll(".sidebar-item[data-view]").forEach(el => {

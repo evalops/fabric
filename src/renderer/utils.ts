@@ -89,6 +89,15 @@ export function renderThinkingBlock(agent: string, text: string, time: number, c
   </div>`;
 }
 
+/** Debounce a function call — waits `ms` after the last invocation before firing */
+export function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return ((...args: any[]) => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  }) as unknown as T;
+}
+
 /** Generate an inline SVG sparkline from an array of values */
 export function sparkline(values: number[], width = 60, height = 16, color = "var(--accent)"): string {
   if (values.length < 2) return "";

@@ -1,5 +1,5 @@
 import { state } from './state';
-import { stringToColor } from './utils';
+import { stringToColor, debounce } from './utils';
 import { openGoalDetail, openAgentDetail } from './detail-panels';
 import type { Goal, GoalStatus } from './types';
 
@@ -18,7 +18,6 @@ const graphState = {
   showDepEdges: true,
   showAreaEdges: false,
   searchQuery: "",
-  hoveredNodeId: null as string | null,
 };
 
 // ── Helper types ─────────────────────────────────────
@@ -81,7 +80,7 @@ function progressRing(cx: number, cy: number, r: number, pct: number, color: str
   `;
 }
 
-function renderNode(n: GNode, isHighlighted: boolean, connectedIds: Set<string>): string {
+function renderNode(n: GNode): string {
   const isGoal = n.type === "goal";
   const dim = getNodeDimensions(n);
   const textX = n.x + (isGoal ? 36 : 30);
@@ -115,10 +114,8 @@ function renderNode(n: GNode, isHighlighted: boolean, connectedIds: Set<string>)
     ? `<text x="${n.x + 36}" y="${n.y + 38}" font-size="10" fill="var(--text-muted)" font-family="var(--font-sans)">${subtitleParts.join(" \u00b7 ")}</text>`
     : "";
 
-  // Dimming for hover-highlight mode
-  const hasHover = graphState.hoveredNodeId !== null;
-  const isDimmed = hasHover && !isHighlighted && !connectedIds.has(n.id);
-  const opacity = isDimmed ? 0.25 : n.status === "complete" ? 0.8 : 1;
+  // Opacity is controlled by CSS/JS hover handlers — render at base opacity
+  const opacity = n.status === "complete" ? 0.8 : 1;
 
   return `
     <g class="graph-node" data-id="${n.id}" style="cursor: pointer; transition: opacity 0.2s;" opacity="${opacity}">
@@ -133,11 +130,7 @@ function renderNode(n: GNode, isHighlighted: boolean, connectedIds: Set<string>)
   `;
 }
 
-function renderEdge(from: GNode, to: GNode, color: string, dash: string, markerEnd: string, connectedIds: Set<string>): string {
-  const hasHover = graphState.hoveredNodeId !== null;
-  const isDimmed = hasHover && !connectedIds.has(from.id) && !connectedIds.has(to.id);
-  const opacity = isDimmed ? 0.08 : 0.7;
-
+function renderEdge(from: GNode, to: GNode, color: string, dash: string, markerEnd: string): string {
   const x1 = from.x + from.w;
   const y1 = from.y + from.h / 2;
   const x2 = to.x;
@@ -146,15 +139,11 @@ function renderEdge(from: GNode, to: GNode, color: string, dash: string, markerE
   const cx2 = x2 - GAP_X * 0.4;
   return `<path d="M${x1},${y1} C${cx1},${y1} ${cx2},${y2} ${x2},${y2}"
     fill="none" stroke="${color}" stroke-width="1.5" stroke-dasharray="${dash}"
-    opacity="${opacity}" marker-end="url(#${markerEnd})" class="graph-edge"
+    opacity="0.7" marker-end="url(#${markerEnd})" class="graph-edge"
     style="transition: opacity 0.2s;" />`;
 }
 
-function renderDepEdge(from: GNode, to: GNode, depType: string, connectedIds: Set<string>): string {
-  const hasHover = graphState.hoveredNodeId !== null;
-  const isDimmed = hasHover && !connectedIds.has(from.id) && !connectedIds.has(to.id);
-  const opacity = isDimmed ? 0.08 : 0.7;
-
+function renderDepEdge(from: GNode, to: GNode, depType: string): string {
   const x1 = from.x + from.w / 2;
   const y1 = from.y + from.h;
   const x2 = to.x + to.w / 2;
@@ -165,7 +154,7 @@ function renderDepEdge(from: GNode, to: GNode, depType: string, connectedIds: Se
   const midY = (y1 + y2) / 2;
   return `<path d="M${x1},${y1} C${x1},${midY} ${x2},${midY} ${x2},${y2}"
     fill="none" stroke="${color}" stroke-width="1.5" stroke-dasharray="${dash}"
-    opacity="${opacity}" marker-end="url(#${marker})"
+    opacity="0.7" marker-end="url(#${marker})" class="graph-edge"
     style="transition: opacity 0.2s;" />`;
 }
 
@@ -548,20 +537,6 @@ export function renderGraph(): void {
   const svgH = maxY + PAD_Y + 20;
   const nodeMap = new Map(nodes.map(n => [n.id, n]));
 
-  // Build connected-node set for hover highlighting
-  const connectedIds = new Set<string>();
-  if (graphState.hoveredNodeId) {
-    connectedIds.add(graphState.hoveredNodeId);
-    edges.forEach(e => {
-      if (e.from === graphState.hoveredNodeId) connectedIds.add(e.to);
-      if (e.to === graphState.hoveredNodeId) connectedIds.add(e.from);
-    });
-    depEdges.forEach(e => {
-      if (e.from === graphState.hoveredNodeId) connectedIds.add(e.to);
-      if (e.to === graphState.hoveredNodeId) connectedIds.add(e.from);
-    });
-  }
-
   const groups = groupGoals(filteredGoals);
 
   // Timeline axis
@@ -607,17 +582,17 @@ export function renderGraph(): void {
           const from = nodeMap.get(e.from);
           const to = nodeMap.get(e.to);
           if (!from || !to) return "";
-          return renderDepEdge(from, to, e.depType, connectedIds);
+          return renderDepEdge(from, to, e.depType);
         }).join("") : ""}
 
         ${edges.map(e => {
           const from = nodeMap.get(e.from);
           const to = nodeMap.get(e.to);
           if (!from || !to) return "";
-          return renderEdge(from, to, "var(--border-lit)", "none", "arrowhead", connectedIds);
+          return renderEdge(from, to, "var(--border-lit)", "none", "arrowhead");
         }).join("")}
 
-        ${nodes.map(n => renderNode(n, connectedIds.has(n.id), connectedIds)).join("")}
+        ${nodes.map(n => renderNode(n)).join("")}
       </svg>
     </div>
     ${renderLegend()}
@@ -625,8 +600,22 @@ export function renderGraph(): void {
 
   // ── Wire interactions ────────────────────────────
 
+  // Build edge lookup for hover highlighting (avoids full re-render)
+  const edgeLookup = new Map<string, Set<string>>();
+  const addEdgeLink = (a: string, b: string) => {
+    if (!edgeLookup.has(a)) edgeLookup.set(a, new Set());
+    if (!edgeLookup.has(b)) edgeLookup.set(b, new Set());
+    edgeLookup.get(a)!.add(b);
+    edgeLookup.get(b)!.add(a);
+  };
+  edges.forEach(e => addEdgeLink(e.from, e.to));
+  depEdges.forEach(e => addEdgeLink(e.from, e.to));
+
+  const allNodeEls = feed.querySelectorAll(".graph-node");
+  const allEdgeEls = feed.querySelectorAll(".graph-edge");
+
   // Node click → detail panel
-  feed.querySelectorAll(".graph-node").forEach(el => {
+  allNodeEls.forEach(el => {
     el.addEventListener("click", () => {
       const id = (el as HTMLElement).dataset.id!;
       if (id.startsWith("agent-")) {
@@ -638,14 +627,26 @@ export function renderGraph(): void {
       }
     });
 
-    // Hover highlight
+    // Hover highlight — DOM-only opacity changes, no full re-render
     el.addEventListener("mouseenter", () => {
-      graphState.hoveredNodeId = (el as HTMLElement).dataset.id!;
-      renderGraph();
+      const hovId = (el as HTMLElement).dataset.id!;
+      const connected = edgeLookup.get(hovId) || new Set<string>();
+      allNodeEls.forEach(n => {
+        const nId = (n as HTMLElement).dataset.id!;
+        (n as SVGGElement).setAttribute("opacity", nId === hovId || connected.has(nId) ? "1" : "0.25");
+      });
+      allEdgeEls.forEach(e => {
+        (e as SVGElement).setAttribute("opacity", "0.08");
+      });
     });
     el.addEventListener("mouseleave", () => {
-      graphState.hoveredNodeId = null;
-      renderGraph();
+      allNodeEls.forEach(n => {
+        const goalNode = nodes.find(nd => nd.id === (n as HTMLElement).dataset.id);
+        (n as SVGGElement).setAttribute("opacity", goalNode?.status === "complete" ? "0.8" : "1");
+      });
+      allEdgeEls.forEach(e => {
+        (e as SVGElement).setAttribute("opacity", "0.7");
+      });
     });
   });
 
@@ -663,12 +664,13 @@ export function renderGraph(): void {
     renderGraph();
   });
 
-  // Search
+  // Search (debounced to avoid re-rendering SVG on every keystroke)
   const searchInput = document.getElementById("graph-search") as HTMLInputElement;
-  searchInput?.addEventListener("input", () => {
+  const debouncedGraphSearch = debounce(() => {
     graphState.searchQuery = searchInput.value;
     renderGraph();
-  });
+  }, 200);
+  searchInput?.addEventListener("input", debouncedGraphSearch);
 
   // Status filter buttons
   feed.querySelectorAll(".graph-status-btn").forEach(btn => {

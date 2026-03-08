@@ -1,5 +1,5 @@
 import { state, getTotalCost, callbacks } from './state';
-import { relativeTime, formatDuration } from './utils';
+import { relativeTime, formatDuration, debounce } from './utils';
 import { showToast } from './toasts';
 import { openGoalDetail } from './detail-panels';
 import type { Goal, GoalStatus } from './types';
@@ -471,13 +471,14 @@ export function renderAllWork(): void {
     });
   });
 
-  // Wire search
+  // Wire search (debounced)
   const searchInput = document.getElementById("work-search") as HTMLInputElement | null;
   if (searchInput) {
-    searchInput.addEventListener("input", () => {
+    const debouncedWorkSearch = debounce(() => {
       workState.search = searchInput.value;
       renderAllWork();
-    });
+    }, 150);
+    searchInput.addEventListener("input", debouncedWorkSearch);
   }
 }
 
@@ -574,12 +575,13 @@ export function renderActivity(): void {
     });
   });
 
-  // Wire search input
-  const searchInput = feed.querySelector("#activity-search") as HTMLInputElement | null;
-  if (searchInput) {
-    searchInput.addEventListener("input", () => {
-      activitySearchQuery = searchInput.value;
+  // Wire search input (debounced)
+  const activitySearchInput = feed.querySelector("#activity-search") as HTMLInputElement | null;
+  if (activitySearchInput) {
+    const debouncedActivitySearch = debounce(() => {
+      activitySearchQuery = activitySearchInput.value;
       renderActivity();
-    });
+    }, 150);
+    activitySearchInput.addEventListener("input", debouncedActivitySearch);
   }
 }

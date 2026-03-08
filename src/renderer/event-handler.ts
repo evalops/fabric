@@ -109,7 +109,7 @@ export function handleFabricEvent(event: any): void {
       if (tcGoal) {
         tcGoal.toolCalls.push(event.data);
       }
-      // Surface errors as activity + update error badge
+      // Surface errors across all relevant views (cross-view error rippling)
       if (!event.data.success) {
         state.activityLog.unshift({
           time: Date.now(),
@@ -121,7 +121,13 @@ export function handleFabricEvent(event: any): void {
           errorBadge.textContent = String(count);
           errorBadge.style.display = "";
         }
+        // Ripple error state to sidebar, active view, and title
+        callbacks.renderSidebarGoals();
+        callbacks.renderTitleStatus();
         if (state.currentView === "activity") renderActivity();
+        if (state.currentView === "all-work") renderAllWork();
+        if (state.currentView === "graph") renderGraph();
+        if (state.currentView === "agents") renderAgents();
       }
       break;
     }

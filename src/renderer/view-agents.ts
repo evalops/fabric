@@ -1,6 +1,6 @@
 import type { Agent } from './types';
 import { state } from './state';
-import { stringToColor, relativeTime, formatDuration } from './utils';
+import { stringToColor, relativeTime, formatDuration, debounce } from './utils';
 import { openAgentDetail } from './detail-panels';
 
 // ── Persistent view state ────────────────────────────
@@ -313,12 +313,13 @@ export function renderAgents(): void {
     });
   });
 
-  // Wire search
+  // Wire search (debounced)
   const searchInput = document.getElementById("agent-search") as HTMLInputElement | null;
   if (searchInput) {
-    searchInput.addEventListener("input", () => {
+    const debouncedAgentSearch = debounce(() => {
       agentViewState.search = searchInput.value;
       renderAgents();
-    });
+    }, 150);
+    searchInput.addEventListener("input", debouncedAgentSearch);
   }
 }
