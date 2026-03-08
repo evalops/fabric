@@ -15,14 +15,54 @@ const TOOL_META: Record<string, { icon: string; color: string; category: string 
   LSP:      { icon: `<svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M4 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 12h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`, color: "#0a7b83", category: "lang" },
 };
 
-/** Lightweight markdown: **bold**, `code`, lists, and --- dividers. Pre-escapes HTML. */
+// ── Language badge labels for fenced code blocks ──────
+const LANG_LABELS: Record<string, string> = {
+  js: "JavaScript", javascript: "JavaScript", ts: "TypeScript", typescript: "TypeScript",
+  py: "Python", python: "Python", rb: "Ruby", ruby: "Ruby", go: "Go", rust: "Rust",
+  java: "Java", cpp: "C++", c: "C", cs: "C#", csharp: "C#", swift: "Swift",
+  kotlin: "Kotlin", php: "PHP", sql: "SQL", sh: "Shell", bash: "Bash", zsh: "Shell",
+  yaml: "YAML", yml: "YAML", json: "JSON", toml: "TOML", xml: "XML", html: "HTML",
+  css: "CSS", scss: "SCSS", md: "Markdown", dockerfile: "Dockerfile", makefile: "Makefile",
+};
+
+/**
+ * Markdown renderer: fenced code blocks with copy + lang badge, **bold**, `inline code`,
+ * lists, blockquotes, headers, links, and hr dividers. Pre-escapes HTML for safety.
+ */
 function renderMarkdown(text: string): string {
-  return escapeHtml(text)
+  // First, extract fenced code blocks before escaping (they need special handling)
+  const codeBlocks: string[] = [];
+  const withPlaceholders = text.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang: string, code: string) => {
+    const idx = codeBlocks.length;
+    const langLabel = LANG_LABELS[lang.toLowerCase()] || lang || "";
+    const langBadge = langLabel ? `<span class="chat-code-lang">${escapeHtml(langLabel)}</span>` : "";
+    const escapedCode = escapeHtml(code.replace(/\n$/, "")); // trim trailing newline
+    codeBlocks.push(
+      `<div class="chat-code-block">`
+      + `<div class="chat-code-header">${langBadge}<button class="chat-code-copy" data-code-idx="${idx}" title="Copy code"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5" stroke="currentColor" stroke-width="1.5"/></svg></button></div>`
+      + `<pre><code>${escapedCode}</code></pre>`
+      + `</div>`
+    );
+    return `\x00CODEBLOCK_${idx}\x00`;
+  });
+
+  // Now escape the rest and apply inline markdown
+  let html = escapeHtml(withPlaceholders)
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/^### (.+)$/gm, '<div class="chat-md-h3">$1</div>')
+    .replace(/^## (.+)$/gm, '<div class="chat-md-h2">$1</div>')
+    .replace(/^# (.+)$/gm, '<div class="chat-md-h1">$1</div>')
+    .replace(/^&gt; (.+)$/gm, '<div class="chat-md-blockquote">$1</div>')
     .replace(/^- (.+)$/gm, '<span class="chat-md-li">\u2022 $1</span>')
     .replace(/^(\d+)\. (.+)$/gm, '<span class="chat-md-li">$1. $2</span>')
     .replace(/^---$/gm, '<hr class="chat-md-hr">');
+
+  // Restore code blocks
+  for (let i = 0; i < codeBlocks.length; i++) {
+    html = html.replace(`\x00CODEBLOCK_${i}\x00`, codeBlocks[i]);
+  }
+  return html;
 }
 
 function getToolMeta(tool: string): { icon: string; color: string; category: string } {
@@ -73,6 +113,33 @@ function renderToolCallCards(calls: ChatToolCall[]): string {
 
 let autoScroll = true;
 let scrollCleanup: (() => void) | null = null;
+let demoSimInterval: ReturnType<typeof setInterval> | null = null;
+
+/** Stop the current streaming response. */
+export function stopStreaming(): void {
+  if (!state.chatThread.isStreaming) return;
+  // Clear demo simulation if running
+  if (demoSimInterval) {
+    clearInterval(demoSimInterval);
+    demoSimInterval = null;
+  }
+  // Finalize the streaming message
+  const streamMsg = state.chatThread.messages.find(
+    m => m.role === "coordinator" && m.status === "streaming"
+  );
+  if (streamMsg) {
+    streamMsg.status = "complete";
+    // Mark any running tools as done
+    if (streamMsg.toolCalls) {
+      streamMsg.toolCalls.forEach(tc => {
+        if (tc.status === "running") tc.status = "done";
+      });
+    }
+    if (!streamMsg.text) streamMsg.text = "(stopped)";
+  }
+  state.chatThread.isStreaming = false;
+  renderChat();
+}
 
 function renderMessage(msg: ChatMessage): string {
   if (msg.role === "system") {
@@ -80,10 +147,13 @@ function renderMessage(msg: ChatMessage): string {
   }
 
   if (msg.role === "user") {
+    const ts = new Date(msg.timestamp);
+    const exact = `${ts.getHours().toString().padStart(2, "0")}:${ts.getMinutes().toString().padStart(2, "0")}`;
     return `
       <div class="chat-row chat-row-user">
         <div class="chat-bubble chat-bubble-user">
           <div class="chat-bubble-text">${escapeHtml(msg.text)}</div>
+          <div class="chat-bubble-user-time" title="${ts.toLocaleString()}">${exact}</div>
         </div>
       </div>
     `;
@@ -110,21 +180,31 @@ function renderMessage(msg: ChatMessage): string {
   const streamingIndicator = msg.status === "streaming"
     ? `<span class="chat-typing"><span></span><span></span><span></span></span>`
     : "";
+  // Copy button (only on complete messages with text)
+  const copyBtn = msg.status === "complete" && msg.text
+    ? `<button class="chat-msg-copy" data-msg-id="${msg.id}" title="Copy message"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5" stroke="currentColor" stroke-width="1.5"/></svg></button>`
+    : "";
+  // Retry button on errors
+  const retryBtn = msg.status === "error"
+    ? `<button class="chat-msg-retry" data-msg-id="${msg.id}" title="Retry">Retry</button>`
+    : "";
 
   return `
-    <div class="chat-row chat-row-coordinator${msg.status === "error" ? " error" : ""}">
+    <div class="chat-row chat-row-coordinator${msg.status === "error" ? " error" : ""}" data-msg-id="${msg.id}">
       <div class="chat-avatar">F</div>
       <div class="chat-bubble chat-bubble-coordinator">
         <div class="chat-bubble-header">
           <span class="chat-bubble-name">Fabric</span>
           ${agentLabel}
           <span class="chat-bubble-time">${relativeTime(msg.timestamp)}</span>
+          ${copyBtn}
         </div>
         ${thinkingHtml}
         ${toolsHtml}
         <div class="chat-bubble-text">${renderMarkdown(msg.text)}${streamingIndicator}</div>
         ${goalChip}
         ${actionsHtml}
+        ${retryBtn}
       </div>
     </div>
   `;
@@ -262,6 +342,58 @@ export function renderChat(): void {
     }
   });
 
+  // Wire code block copy buttons
+  feed.querySelectorAll(".chat-code-copy").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const block = btn.closest(".chat-code-block");
+      const code = block?.querySelector("code")?.textContent || "";
+      navigator.clipboard.writeText(code).then(() => {
+        btn.classList.add("copied");
+        setTimeout(() => btn.classList.remove("copied"), 1500);
+      });
+    });
+  });
+
+  // Wire message copy buttons
+  feed.querySelectorAll(".chat-msg-copy").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const msgId = (btn as HTMLElement).dataset.msgId;
+      const msg = state.chatThread.messages.find(m => m.id === msgId);
+      if (msg) {
+        navigator.clipboard.writeText(msg.text).then(() => {
+          btn.classList.add("copied");
+          setTimeout(() => btn.classList.remove("copied"), 1500);
+        });
+      }
+    });
+  });
+
+  // Wire retry buttons (on error messages)
+  feed.querySelectorAll(".chat-msg-retry").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const msgId = (btn as HTMLElement).dataset.msgId;
+      // Find the user message that preceded this error
+      const idx = state.chatThread.messages.findIndex(m => m.id === msgId);
+      if (idx > 0) {
+        const userMsg = state.chatThread.messages[idx - 1];
+        if (userMsg.role === "user") {
+          // Remove the error message and retry
+          state.chatThread.messages.splice(idx, 1);
+          sendChatMessage(userMsg.text);
+          return; // sendChatMessage will re-render
+        }
+      }
+    });
+  });
+
+  // Wire stop generation button
+  const stopBtn = document.getElementById("chat-stop");
+  if (stopBtn) {
+    stopBtn.addEventListener("click", () => stopStreaming());
+  }
+
   // Wire new chat button
   const newChatBtn = document.getElementById("chat-new-thread");
   if (newChatBtn) {
@@ -284,17 +416,23 @@ export function renderChat(): void {
 }
 
 function renderChatInput(): string {
+  const isStreaming = state.chatThread.isStreaming;
+  const sendOrStop = isStreaming
+    ? `<button id="chat-stop" class="chat-stop-btn" title="Stop generating (Esc)">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="3" y="3" width="10" height="10" rx="1.5" fill="currentColor"/></svg>
+      </button>`
+    : `<button id="chat-send" class="chat-send-btn" title="Send (Enter)">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M14 8L2 2l2.5 6L2 14l12-6z" fill="currentColor"/></svg>
+      </button>`;
   return `
     <div class="chat-input-area">
-      <div class="chat-input-wrap">
-        <textarea id="chat-input" class="chat-input" placeholder="Ask Fabric anything, or describe a goal..." rows="1" spellcheck="false"></textarea>
-        <button id="chat-send" class="chat-send-btn" title="Send (Enter)">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M14 8L2 2l2.5 6L2 14l12-6z" fill="currentColor"/></svg>
-        </button>
+      <div class="chat-input-wrap${isStreaming ? " streaming" : ""}">
+        <textarea id="chat-input" class="chat-input" placeholder="${isStreaming ? "Waiting for response..." : "Ask Fabric anything, or describe a goal..."}" rows="1" spellcheck="false" ${isStreaming ? "disabled" : ""}></textarea>
+        ${sendOrStop}
       </div>
       <div class="chat-input-footer">
         <span class="chat-input-model">${state.demoMode ? "demo" : state.settings.model || "sonnet-4"}</span>
-        <span class="chat-input-hint">${state.chatThread.messages.length > 0 ? `<button id="chat-new-thread" class="chat-new-btn" title="New chat">New chat</button>` : ""}<kbd>Cmd+K</kbd> commands</span>
+        <span class="chat-input-hint">${state.chatThread.messages.length > 0 ? `<button id="chat-new-thread" class="chat-new-btn" title="New chat">New chat</button>` : ""}<kbd>${isStreaming ? "Esc" : "Cmd+K"}</kbd> ${isStreaming ? "stop" : "commands"}</span>
       </div>
     </div>
   `;
@@ -370,7 +508,7 @@ function simulateResponse(streamMsg: ChatMessage, text: string): void {
     streamMsg.thinking = response.thinking;
   }
 
-  const interval = setInterval(() => {
+  demoSimInterval = setInterval(() => {
     phaseTimer++;
 
     if (phase === "thinking") {
@@ -410,7 +548,7 @@ function simulateResponse(streamMsg: ChatMessage, text: string): void {
       charIdx += chunk.length;
 
       if (charIdx >= response.text.length) {
-        clearInterval(interval);
+        if (demoSimInterval) { clearInterval(demoSimInterval); demoSimInterval = null; }
         streamMsg.status = "complete";
         streamMsg.goalId = response.goalId;
         streamMsg.costUsd = response.costUsd;
@@ -505,9 +643,22 @@ function getSimulatedResponse(userText: string): {
     };
   }
 
+  if (q.includes("fix") || q.includes("bug") || q.includes("error") || q.includes("code")) {
+    return {
+      text: "I found the issue. The error handler wasn't catching async rejections properly. Here's the fix:\n\n```typescript\nasync function handleRequest(req: Request): Promise<Response> {\n  try {\n    const result = await processRequest(req);\n    return new Response(JSON.stringify(result), { status: 200 });\n  } catch (err) {\n    console.error(\"Request failed:\", err);\n    return new Response(\n      JSON.stringify({ error: err.message }),\n      { status: 500 }\n    );\n  }\n}\n```\n\nThe key change is wrapping the entire handler in a try/catch instead of relying on `.catch()` chains. This also handles synchronous throws from `processRequest`.\n\nI've also added a test:\n\n```typescript\nit(\"returns 500 on processing failure\", async () => {\n  const req = new Request(\"/api/test\");\n  const res = await handleRequest(req);\n  expect(res.status).toBe(500);\n});\n```\n\nShall I apply this to the codebase?",
+      toolCalls: [
+        { tool: "Grep", status: "done", input: "handleRequest", output: "Found in src/server/handler.ts:42", durationMs: 32 },
+        { tool: "Read", status: "done", input: "src/server/handler.ts", output: "146 lines, async handler with .catch() pattern", durationMs: 18 },
+        { tool: "Edit", status: "done", input: "src/server/handler.ts:42-58", output: "Replaced .catch() with try/catch", durationMs: 24 },
+      ],
+      costUsd: 0.04,
+      thinking: "The user is reporting a bug. Let me search for the error handler and examine the async flow. The issue is likely unhandled promise rejections.",
+    };
+  }
+
   // Default response
   return {
-    text: `I understand. Let me work on that.\n\nI'll coordinate the right agents and keep you posted on progress. You can check the Activity or Agents view for real-time observability.`,
+    text: `I understand. Let me work on that.\n\nI'll coordinate the right agents and keep you posted on progress. You can check the **Activity** or **Agents** view for real-time observability.`,
     toolCalls: [
       { tool: "Read", status: "done", input: "project context", durationMs: 15 },
     ],

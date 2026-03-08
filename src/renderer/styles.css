@@ -3094,11 +3094,182 @@ body.dark {
   color: var(--accent);
 }
 
-/* Markdown hr in chat */
+/* ── Markdown elements in chat ───────────────────── */
 .chat-md-hr {
   border: none;
   border-top: 1px solid var(--border);
   margin: 8px 0;
+}
+.chat-md-h1 { font-size: 16px; font-weight: 700; margin: 10px 0 4px; letter-spacing: -0.3px; }
+.chat-md-h2 { font-size: 14.5px; font-weight: 700; margin: 8px 0 4px; }
+.chat-md-h3 { font-size: 13.5px; font-weight: 600; margin: 6px 0 2px; color: var(--text-secondary); }
+.chat-md-blockquote {
+  border-left: 3px solid var(--border-lit);
+  padding: 2px 0 2px 12px;
+  margin: 4px 0;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+/* ── Fenced code blocks ─────────────────────────── */
+.chat-code-block {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+.chat-code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-hover);
+  min-height: 26px;
+}
+.chat-code-lang {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-muted);
+}
+.chat-code-copy {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-family: var(--font-sans);
+  transition: all 0.12s;
+}
+.chat-code-copy:hover {
+  color: var(--text-primary);
+  background: var(--bg-active);
+}
+.chat-code-copy.copied {
+  color: var(--green);
+}
+.chat-code-copy.copied::after {
+  content: "Copied!";
+  font-size: 10px;
+  margin-left: 2px;
+}
+.chat-code-block pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-primary);
+  tab-size: 2;
+}
+.chat-code-block code {
+  background: none !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  font-size: inherit;
+}
+body.dark .chat-code-block {
+  background: #0d1117;
+  border-color: #21262d;
+}
+body.dark .chat-code-header {
+  background: #161b22;
+  border-bottom-color: #21262d;
+}
+
+/* ── Message copy & retry buttons ───────────────── */
+.chat-msg-copy {
+  display: none;
+  align-items: center;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  margin-left: auto;
+  transition: all 0.12s;
+}
+.chat-row-coordinator:hover .chat-msg-copy {
+  display: flex;
+}
+.chat-msg-copy:hover {
+  color: var(--text-primary);
+  background: var(--bg-active);
+}
+.chat-msg-copy.copied {
+  color: var(--green);
+}
+.chat-msg-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 4px 12px;
+  border-radius: var(--radius-xs);
+  border: 1px solid color-mix(in srgb, var(--red) 30%, var(--border));
+  background: var(--red-soft);
+  color: var(--red);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.chat-msg-retry:hover {
+  background: color-mix(in srgb, var(--red) 15%, transparent);
+  border-color: var(--red);
+}
+
+/* ── User message timestamp ─────────────────────── */
+.chat-bubble-user-time {
+  font-size: 10px;
+  opacity: 0;
+  text-align: right;
+  margin-top: 4px;
+  color: rgba(255,255,255,0.5);
+  transition: opacity 0.15s;
+}
+.chat-row-user:hover .chat-bubble-user-time {
+  opacity: 1;
+}
+
+/* ── Stop generation button ─────────────────────── */
+.chat-stop-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px;
+  border-radius: var(--radius-xs);
+  border: none;
+  background: var(--red);
+  color: #fff;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, transform 0.1s;
+  animation: chat-stop-pulse 1.5s ease-in-out infinite;
+}
+.chat-stop-btn:hover { filter: brightness(1.1); }
+.chat-stop-btn:active { transform: scale(0.95); }
+@keyframes chat-stop-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(207,34,46,0.3); }
+  50% { box-shadow: 0 0 0 4px rgba(207,34,46,0); }
+}
+
+/* Streaming state on input */
+.chat-input-wrap.streaming {
+  border-color: var(--border);
+  background: var(--bg-hover);
+}
+.chat-input-wrap.streaming .chat-input {
+  color: var(--text-muted);
 }
 
 /* New chat button */
@@ -3118,6 +3289,43 @@ body.dark {
   color: var(--accent);
   border-color: var(--accent);
   background: var(--accent-soft);
+}
+
+/* ── Chat dark mode enhancements ─────────────────── */
+body.dark .chat-bubble-coordinator {
+  background: #1a1f2e;
+  border-color: #2a3348;
+}
+body.dark .chat-tool-card {
+  background: #13171f;
+  border-color: #2a3348;
+}
+body.dark .chat-tool-card.running {
+  background: linear-gradient(90deg, rgba(96,165,250,0.08) 0%, #13171f 100%);
+}
+body.dark .chat-typing span {
+  background: var(--text-secondary);
+}
+body.dark .chat-suggestion {
+  background: #13171f;
+  border-color: #2a3348;
+}
+body.dark .chat-input-wrap {
+  background: #13171f;
+  border-color: #2a3348;
+}
+body.dark .chat-input-wrap:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(129,140,248,0.15);
+}
+body.dark .chat-stop-btn {
+  background: #dc2626;
+}
+
+/* ── Select dropdown dark mode fix ──────────────── */
+body.dark .settings-select,
+body.dark .graph-toolbar-select {
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23525d75' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
 /* Make feed a flex column when in chat view so empty state + input layout works */

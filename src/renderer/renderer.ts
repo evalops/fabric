@@ -12,7 +12,7 @@ import { renderAgents } from './view-agents';
 import { renderGraph } from './view-graph';
 import { renderCosts } from './view-costs';
 import { renderSettings } from './view-settings';
-import { renderChat, sendChatMessage } from './view-chat';
+import { renderChat, sendChatMessage, stopStreaming } from './view-chat';
 import { openCmdk, closeCmdk, renderCmdkResults } from './cmdk';
 import { handleFabricEvent } from './event-handler';
 
@@ -245,7 +245,10 @@ function init(): void {
     const isInput = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 
     if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); openCmdk(); return; }
-    if (e.key === "Escape") { closeCmdk(); closeDetail(); dismissShortcutHelp(); return; }
+    if (e.key === "Escape") {
+      if (state.chatThread.isStreaming) { stopStreaming(); return; }
+      closeCmdk(); closeDetail(); dismissShortcutHelp(); return;
+    }
     if ((e.metaKey || e.ctrlKey) && e.key === "d") { e.preventDefault(); toggleDarkMode(); return; }
 
     // Number keys for quick nav (only when not typing)
