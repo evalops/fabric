@@ -249,6 +249,58 @@ const _rawGoals: any[] = [
   },
 ];
 
+const _goalThinking: Record<string, { thinking: any[]; diffs: any[] }> = {
+  g1: {
+    thinking: [
+      {
+        time: NOW - 13 * MIN, agent: "build-validator",
+        text: "I need to verify all build artifacts before we proceed with the canary deployment.\n\nChecking:\n1. Docker image SHA matches the CI build output\n2. All asset hashes match the manifest\n3. No unsigned artifacts in the bundle\n4. Version strings are consistent across services\n\nAll four checks pass. Proceeding to test runner.",
+      },
+      {
+        time: NOW - 4 * MIN, agent: "deploy-orchestrator",
+        text: "Starting canary at 5% traffic in us-east-1. I chose this region first because it has the highest traffic volume, giving us statistical significance faster.\n\nRollback plan: if error rate exceeds 0.1% threshold, immediately route all traffic back to v2.2.1. The load balancer config is already prepared for instant rollback.",
+      },
+    ],
+    diffs: [
+      {
+        file: "deploy/canary-config.yaml", time: NOW - 4 * MIN, agent: "deploy-orchestrator",
+        hunks: "@@ -12,7 +12,7 @@\n spec:\n   canary:\n-    weight: 0\n+    weight: 5\n     region: us-east-1\n-    version: v2.2.1\n+    version: v2.3.0\n     rollback_threshold: 0.1",
+      },
+    ],
+  },
+  g2: {
+    thinking: [
+      {
+        time: NOW - 7 * MIN, agent: "data-analyst",
+        text: "Running SQL query across transaction_events for the last 90 days. Looking for statistical outliers in charge amounts.\n\nI'm partitioning by merchant_id and computing z-scores for daily revenue. Any merchant with z > 3.0 on multiple days is flagged.\n\nQuery returned 142K rows in 4.2s. Found 847 transactions with z > 3.0, concentrated in 3 merchant accounts.",
+      },
+      {
+        time: NOW - 5 * MIN, agent: "anomaly-detector",
+        text: "Clustering the 847 flagged transactions using DBSCAN.\n\nCluster 1: merchant_id=M-4821, pattern is duplicate charges exactly 30s apart -- looks like a retry bug in the payment gateway.\n\nCluster 2: merchant_id=M-9102, abnormally high transaction amounts starting March 1st -- correlates with a promo code that wasn't applying the discount.\n\nCluster 3: merchant_id=M-1150, negative amounts (refunds) that never completed -- stuck in pending state.",
+      },
+    ],
+    diffs: [],
+  },
+  g4: {
+    thinking: [
+      {
+        time: NOW - 26 * MIN, agent: "db-optimizer",
+        text: "Found 3 slow queries responsible for 73% of P95 latency:\n\n1. /api/billing: Full table scan on transactions (missing index on created_at)\n2. /api/search: N+1 query pattern loading user profiles\n3. /api/dashboard: Aggregation query recalculating stats on every request\n\nFix plan:\n- Add composite index (merchant_id, created_at) on transactions\n- Rewrite search to use JOIN instead of N+1\n- Add materialized view for dashboard stats with 5-minute refresh",
+      },
+    ],
+    diffs: [
+      {
+        file: "src/db/queries/billing.sql", time: NOW - 25 * MIN, agent: "db-optimizer",
+        hunks: "@@ -1,6 +1,8 @@\n+-- Added composite index for billing endpoint\n+CREATE INDEX CONCURRENTLY idx_txn_merchant_date ON transactions(merchant_id, created_at);\n+\n SELECT t.id, t.amount, t.status\n FROM transactions t\n-WHERE t.created_at > NOW() - INTERVAL '30 days'\n-ORDER BY t.created_at DESC;\n+WHERE t.merchant_id = $1\n+  AND t.created_at > NOW() - INTERVAL '30 days'\n+ORDER BY t.created_at DESC\n+LIMIT 100;",
+      },
+      {
+        file: "src/api/search.ts", time: NOW - 24 * MIN, agent: "db-optimizer",
+        hunks: "@@ -15,10 +15,8 @@\n-  // N+1: loading profiles one by one\n-  const results = await db.query('SELECT * FROM items WHERE ...');\n-  for (const item of results) {\n-    item.user = await db.query('SELECT * FROM users WHERE id = $1', [item.userId]);\n-  }\n+  // Rewritten: single JOIN query\n+  const results = await db.query(`\n+    SELECT i.*, u.name as user_name, u.avatar as user_avatar\n+    FROM items i\n+    JOIN users u ON u.id = i.user_id\n+    WHERE i.search_vector @@ plainto_tsquery($1)\n+    LIMIT 50\n+  `, [query]);",
+      },
+    ],
+  },
+};
+
 const _goalInterconnections: Record<string, Partial<Goal>> = {
   g1: {
     blockedBy: ["g5"],
@@ -407,6 +459,8 @@ export function initMockData(): void {
     turnCount: Math.floor(Math.random() * 20) + 5,
     toolCalls: generateToolCalls(g.id, g.steps),
     retryCount: g.status === "blocked" ? 1 : 0,
+    thinking: _goalThinking[g.id]?.thinking || [],
+    diffs: _goalThinking[g.id]?.diffs || [],
   }));
 
   state.attentionItems = [

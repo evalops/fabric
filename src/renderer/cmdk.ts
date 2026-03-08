@@ -158,7 +158,7 @@ function getCmdkActions(query: string): { group: string; items: CmdkAction[] }[]
     commandActions.push({ icon: "$", text: `Today's spend: $${getTotalCost().toFixed(2)}`, hint: "info", action: () => { closeCmdk(); callbacks.switchView("costs"); } });
   }
   if (q.includes("dark") || q.includes("light") || q.includes("theme") || q.includes("mode")) {
-    commandActions.push({ icon: state.darkMode ? "\u2600" : "\u263e", text: `Switch to ${state.darkMode ? "light" : "dark"} mode`, hint: "theme", action: () => { closeCmdk(); toggleDarkMode(); } });
+    commandActions.push({ icon: "\u25D1", text: `Switch to ${state.darkMode ? "light" : "dark"} mode`, hint: "theme", action: () => { closeCmdk(); toggleDarkMode(); } });
   }
   if (q.includes("cancel") || q.includes("abort") || q.includes("kill")) {
     const activeGoals = state.goals.filter(g => g.status === "active");
@@ -233,6 +233,7 @@ function getCmdkActions(query: string): { group: string; items: CmdkAction[] }[]
     }));
 
   const navActions: CmdkAction[] = [
+    { icon: "\u2709", text: "Chat", hint: "view", action: () => { closeCmdk(); callbacks.switchView("chat"); } },
     { icon: "!", text: "Needs You", hint: "view", action: () => { closeCmdk(); callbacks.switchView("needs-you"); } },
     { icon: "\u25c7", text: "All Work", hint: "view", action: () => { closeCmdk(); callbacks.switchView("all-work"); } },
     { icon: "\u22ee", text: "Activity", hint: "view", action: () => { closeCmdk(); callbacks.switchView("activity"); } },

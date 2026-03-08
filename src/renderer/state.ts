@@ -1,4 +1,4 @@
-import type { Goal, Agent, Attention, ActivityEvent, FabricSettings, FabricBridge, GoalTemplate } from './types';
+import type { Goal, Agent, Attention, ActivityEvent, FabricSettings, FabricBridge, GoalTemplate, ChatThread } from './types';
 
 const SETTINGS_KEY = "fabric:settings:v1";
 const TEMPLATES_KEY = "fabric:templates:v1";
@@ -74,9 +74,17 @@ export const state = {
   templates: loadTemplates(),
   settings: loadSettings(),
   darkMode: false,
-  currentView: "needs-you",
+  demoMode: !bridge,
+  currentView: "chat",
   simIdx: 0,
   cmdkSelectedIdx: 0,
+  chatThread: {
+    id: "thread-1",
+    messages: [],
+    isStreaming: false,
+    createdAt: Date.now(),
+  } as ChatThread,
+  chatThreads: [] as ChatThread[],
 };
 
 export function saveTemplates(): void {
@@ -90,6 +98,8 @@ export const callbacks = {
   openAgentDetail: (_id: string) => {},
   renderSidebarGoals: () => {},
   renderTitleStatus: () => {},
+  renderChat: () => {},
+  sendChatMessage: (_text: string) => {},
 };
 
 export function saveSettings(): void {
@@ -113,14 +123,29 @@ export function saveSettings(): void {
   }
 }
 
+/** Suppress transition flash during theme switch (inspired by t3code) */
+function suppressTransitionsWhileSwitching(fn: () => void): void {
+  document.body.classList.add("no-transitions");
+  fn();
+  // Re-enable transitions on the next frame after styles settle
+  requestAnimationFrame(() => document.body.classList.remove("no-transitions"));
+}
+
 export function applyTheme(theme: FabricSettings["theme"]): void {
   let shouldBeDark = false;
   if (theme === "dark") shouldBeDark = true;
   else if (theme === "system") shouldBeDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   state.darkMode = shouldBeDark;
-  document.body.classList.toggle("dark", shouldBeDark);
+  suppressTransitionsWhileSwitching(() => {
+    document.body.classList.toggle("dark", shouldBeDark);
+  });
   const btn = document.getElementById("dark-mode-toggle");
-  if (btn) btn.textContent = shouldBeDark ? "\u2600" : "\u263e";
+  if (btn) {
+    const moon = btn.querySelector("#theme-icon-moon") as HTMLElement | null;
+    const sun = btn.querySelector("#theme-icon-sun") as HTMLElement | null;
+    if (moon) moon.style.display = shouldBeDark ? "none" : "";
+    if (sun) sun.style.display = shouldBeDark ? "" : "none";
+  }
 }
 
 // Listen for OS theme changes when in "system" mode
@@ -132,9 +157,16 @@ export function toggleDarkMode(): void {
   state.darkMode = !state.darkMode;
   state.settings.theme = state.darkMode ? "dark" : "light";
   saveSettings();
-  document.body.classList.toggle("dark", state.darkMode);
+  suppressTransitionsWhileSwitching(() => {
+    document.body.classList.toggle("dark", state.darkMode);
+  });
   const btn = document.getElementById("dark-mode-toggle");
-  if (btn) btn.textContent = state.darkMode ? "\u2600" : "\u263e";
+  if (btn) {
+    const moon = btn.querySelector("#theme-icon-moon") as HTMLElement | null;
+    const sun = btn.querySelector("#theme-icon-sun") as HTMLElement | null;
+    if (moon) moon.style.display = state.darkMode ? "none" : "";
+    if (sun) sun.style.display = state.darkMode ? "" : "none";
+  }
 }
 
 export function getTotalCost(): number {

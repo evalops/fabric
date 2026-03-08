@@ -75,7 +75,8 @@ export type FabricEventType =
   | "goal-created" | "goal-updated" | "step-updated"
   | "activity" | "attention" | "toast"
   | "agent-message" | "cost-update" | "tool-call"
-  | "observability" | "steering" | "retry" | "compaction";
+  | "observability" | "steering" | "retry" | "compaction"
+  | "chat-text" | "chat-tool-start" | "chat-tool-end" | "chat-complete" | "chat-error";
 
 export interface FabricEvent {
   type: FabricEventType;
@@ -965,6 +966,192 @@ Work in the current directory. Be efficient and focused.${extPromptSnippets ? `\
       goal.summary = `Failed on resume: ${err.message}`;
       this.emitEvent({ type: "goal-updated", goalId, data: goal });
     });
+  }
+
+  // ── Coordinator Chat ────────────────────────────────
+  // Lightweight chat interface using the same SDK query() but without
+  // goal decomposition. The coordinator can read files, run commands,
+  // and reference active goals to answer questions.
+
+  private chatSessionId?: string;
+  private chatAbortController?: AbortController;
+
+  /**
+   * Send a chat message to the coordinator agent.
+   * Streams responses back via chat-* events.
+   */
+  async chat(text: string, threadId: string): Promise<void> {
+    // Abort any in-flight chat query
+    if (this.chatAbortController) {
+      this.chatAbortController.abort();
+    }
+    this.chatAbortController = new AbortController();
+
+    // Build context about current goals for the coordinator
+    const goalSummaries = Array.from(this.goals.values())
+      .filter(g => g.status === "active" || g.status === "blocked")
+      .map(g => `- [${g.status}] "${g.title}" (${Math.round(g.progress)}%, $${g.costUsd.toFixed(2)}, ${g.turnCount} turns)`)
+      .join("\n");
+
+    const allGoalIds = Array.from(this.goals.keys()).join(", ");
+
+    const systemPrompt = `You are Fabric, an AI orchestration coordinator. You help the user manage a team of AI agents working on goals.
+
+Current state:
+${goalSummaries || "No active goals."}
+
+Available goal IDs: ${allGoalIds || "none"}
+
+You can:
+- Answer questions about goal status, agent activity, and costs
+- Read files, search code, and run commands to investigate issues
+- Create new goals by describing what needs to be done (the user will confirm)
+- Provide analysis and recommendations
+
+Be concise and direct. When you use tools, explain what you found.`;
+
+    const options: Options = {
+      abortController: this.chatAbortController,
+      tools: ["Read", "Grep", "Glob", "Bash", "WebSearch"],
+      allowedTools: ["Read", "Grep", "Glob"],
+      permissionMode: "default",
+      maxTurns: 10,
+      maxBudgetUsd: 0.50,
+      effort: "low",
+      persistSession: true,
+      hooks: {
+        PreToolUse: [{
+          hooks: [async (input: any) => {
+            const toolName = input.tool_name as string | undefined;
+            if (toolName) {
+              const toolInput = this.extractToolInput(input);
+              this.emitEvent({
+                type: "chat-tool-start",
+                data: { threadId, tool: toolName, input: toolInput, startedAt: Date.now() },
+              });
+            }
+            return {};
+          }],
+        }],
+        PostToolUse: [{
+          hooks: [async (input: any) => {
+            const toolName = input.tool_name as string | undefined;
+            if (toolName) {
+              const output = this.extractToolOutput(input);
+              const isError = input.error != null;
+              this.emitEvent({
+                type: "chat-tool-end",
+                data: {
+                  threadId,
+                  tool: toolName,
+                  output: isError ? undefined : output,
+                  error: isError ? (input.error?.message || String(input.error)) : undefined,
+                  durationMs: input.durationMs || 0,
+                },
+              });
+            }
+            return {};
+          }],
+        }],
+      },
+    };
+
+    const queryArgs = this.chatSessionId
+      ? { prompt: text, options, sessionId: this.chatSessionId }
+      : { prompt: systemPrompt + "\n\nUser: " + text, options };
+
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+
+    try {
+      const result = query(queryArgs);
+
+      for await (const message of result) {
+        if (message.type === "assistant") {
+          const assistantMsg = message as SDKAssistantMessage;
+          // Store session for conversation continuity
+          if (assistantMsg.session_id) {
+            this.chatSessionId = assistantMsg.session_id;
+          }
+          // Track tokens
+          const usage = (assistantMsg.message as any).usage;
+          if (usage) {
+            totalInputTokens += usage.input_tokens || 0;
+            totalOutputTokens += usage.output_tokens || 0;
+          }
+          // Emit text blocks
+          for (const block of assistantMsg.message.content) {
+            if (block.type === "text" && block.text.trim()) {
+              this.emitEvent({
+                type: "chat-text",
+                data: { threadId, text: block.text },
+              });
+            }
+          }
+        } else if (message.type === "result") {
+          const resultMsg = message as SDKResultMessage;
+          const effectiveModel = this.defaultModel;
+          const pricing = MODEL_PRICING[effectiveModel] || MODEL_PRICING.sonnet;
+          const costUsd = (totalInputTokens / 1_000_000) * pricing.input
+                        + (totalOutputTokens / 1_000_000) * pricing.output;
+          this.emitEvent({
+            type: "chat-complete",
+            data: {
+              threadId,
+              costUsd,
+              inputTokens: totalInputTokens,
+              outputTokens: totalOutputTokens,
+              outcome: resultMsg.subtype,
+            },
+          });
+        }
+      }
+    } catch (err: any) {
+      if (err.name === "AbortError") return; // User cancelled
+      // Check if retryable
+      if (isRetryableError(err)) {
+        this.emitEvent({
+          type: "chat-error",
+          data: { threadId, error: `Temporary error: ${err.message}. Please try again.`, retryable: true },
+        });
+      } else {
+        this.emitEvent({
+          type: "chat-error",
+          data: { threadId, error: err.message, retryable: false },
+        });
+      }
+    } finally {
+      this.chatAbortController = undefined;
+    }
+  }
+
+  /**
+   * Extract a human-readable summary of tool input for the chat UI.
+   */
+  private extractToolInput(hookInput: any): string {
+    const input = hookInput.tool_input;
+    if (!input) return "";
+    // Common patterns
+    if (input.file_path) return input.file_path;
+    if (input.command) return input.command.slice(0, 80);
+    if (input.pattern) return input.pattern + (input.path ? ` in ${input.path}` : "");
+    if (input.query) return input.query.slice(0, 80);
+    if (input.url) return input.url.slice(0, 80);
+    return JSON.stringify(input).slice(0, 60);
+  }
+
+  /**
+   * Extract a human-readable summary of tool output for the chat UI.
+   */
+  private extractToolOutput(hookInput: any): string {
+    const output = hookInput.tool_result;
+    if (!output) return "";
+    if (typeof output === "string") return output.slice(0, 120);
+    if (output.content) {
+      const textBlock = output.content.find((b: any) => b.type === "text");
+      if (textBlock) return textBlock.text.slice(0, 120);
+    }
+    return "";
   }
 
   // ── Event Emitting ──────────────────────────────────

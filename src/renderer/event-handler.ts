@@ -4,10 +4,38 @@ import { renderAllWork, renderActivity, renderNeedsYou } from './views';
 import { renderCosts } from './view-costs';
 import { renderGraph } from './view-graph';
 import { renderAgents } from './view-agents';
+import type { ChatToolCall } from './types';
 
 export function handleFabricEvent(event: any): void {
   switch (event.type) {
     case "goal-created": {
+      // Add goal to state if it doesn't already exist (may have been added optimistically)
+      const newGoal = event.data;
+      if (newGoal && newGoal.id && !state.goals.find(g => g.id === newGoal.id)) {
+        state.goals.unshift({
+          id: newGoal.id,
+          title: newGoal.title || "Untitled",
+          summary: newGoal.summary || "",
+          status: newGoal.status || "active",
+          progress: newGoal.progress || 0,
+          agentCount: newGoal.agentCount || 0,
+          steps: newGoal.steps || [],
+          timeline: newGoal.timeline || [],
+          costUsd: newGoal.costUsd || 0,
+          inputTokens: newGoal.inputTokens || 0,
+          outputTokens: newGoal.outputTokens || 0,
+          startedAt: newGoal.startedAt || Date.now(),
+          blockedBy: newGoal.blockedBy || [],
+          enables: newGoal.enables || [],
+          insights: newGoal.insights || [],
+          areasAffected: newGoal.areasAffected || [],
+          turnCount: newGoal.turnCount || 0,
+          toolCalls: newGoal.toolCalls || [],
+          retryCount: newGoal.retryCount || 0,
+          thinking: newGoal.thinking || [],
+          diffs: newGoal.diffs || [],
+        });
+      }
       callbacks.renderSidebarGoals();
       callbacks.renderTitleStatus();
       if (state.currentView === "all-work") renderAllWork();
@@ -158,6 +186,85 @@ export function handleFabricEvent(event: any): void {
         badge.style.display = "";
       }
       if (state.currentView === "needs-you") renderNeedsYou();
+      break;
+    }
+
+    // ── Chat events (coordinator responses) ──────────
+    case "chat-text": {
+      // Find the streaming message in the current thread
+      const threadId = event.data.threadId;
+      if (state.chatThread.id !== threadId) break;
+      const streamingMsg = state.chatThread.messages.find(
+        m => m.role === "coordinator" && m.status === "streaming"
+      );
+      if (streamingMsg) {
+        streamingMsg.text += event.data.text;
+        if (state.currentView === "chat") callbacks.renderChat();
+      }
+      break;
+    }
+    case "chat-tool-start": {
+      if (state.chatThread.id !== event.data.threadId) break;
+      const streamMsg = state.chatThread.messages.find(
+        m => m.role === "coordinator" && m.status === "streaming"
+      );
+      if (streamMsg) {
+        if (!streamMsg.toolCalls) streamMsg.toolCalls = [];
+        const tc: ChatToolCall = {
+          tool: event.data.tool,
+          status: "running",
+          input: event.data.input,
+        };
+        streamMsg.toolCalls.push(tc);
+        if (state.currentView === "chat") callbacks.renderChat();
+      }
+      break;
+    }
+    case "chat-tool-end": {
+      if (state.chatThread.id !== event.data.threadId) break;
+      const stMsg = state.chatThread.messages.find(
+        m => m.role === "coordinator" && m.status === "streaming"
+      );
+      if (stMsg && stMsg.toolCalls) {
+        // Find the last running tool with matching name
+        const tc = [...stMsg.toolCalls].reverse().find(
+          t => t.tool === event.data.tool && t.status === "running"
+        );
+        if (tc) {
+          tc.status = event.data.error ? "error" : "done";
+          tc.output = event.data.output;
+          tc.error = event.data.error;
+          tc.durationMs = event.data.durationMs;
+        }
+        if (state.currentView === "chat") callbacks.renderChat();
+      }
+      break;
+    }
+    case "chat-complete": {
+      if (state.chatThread.id !== event.data.threadId) break;
+      const completeMsg = state.chatThread.messages.find(
+        m => m.role === "coordinator" && m.status === "streaming"
+      );
+      if (completeMsg) {
+        completeMsg.status = "complete";
+        completeMsg.costUsd = event.data.costUsd;
+        state.chatThread.isStreaming = false;
+        if (state.currentView === "chat") callbacks.renderChat();
+      }
+      break;
+    }
+    case "chat-error": {
+      if (state.chatThread.id !== event.data.threadId) break;
+      const errMsg = state.chatThread.messages.find(
+        m => m.role === "coordinator" && m.status === "streaming"
+      );
+      if (errMsg) {
+        errMsg.status = "error";
+        errMsg.text = errMsg.text || `Error: ${event.data.error}`;
+        state.chatThread.isStreaming = false;
+        if (state.currentView === "chat") callbacks.renderChat();
+      }
+      showToast("Chat error", event.data.error, "var(--red)");
       break;
     }
   }

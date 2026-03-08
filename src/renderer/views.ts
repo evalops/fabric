@@ -40,18 +40,36 @@ export function renderTitleStatus(): void {
   }
 }
 
+// Track which sidebar groups are collapsed (persists across re-renders)
+const collapsedGroups = new Set<string>();
+
 export function renderSidebarGoals(): void {
   const container = document.getElementById("sidebar-goals");
   if (!container) return;
 
-  // Render mini stats bar (progress distribution)
+  const total = state.goals.length;
+  const active = state.goals.filter(g => g.status === "active").length;
+  const complete = state.goals.filter(g => g.status === "complete").length;
+  const blocked = state.goals.filter(g => g.status === "blocked").length;
+  const failed = state.goals.filter(g => g.status === "failed").length;
+
+  // Render inline counts next to "Goals" label
+  const countsEl = document.getElementById("sidebar-goal-counts");
+  if (countsEl && total > 0) {
+    const counts: { n: number; color: string }[] = [
+      { n: active, color: "var(--blue)" },
+      { n: blocked, color: "var(--amber)" },
+      { n: failed, color: "var(--red)" },
+      { n: complete, color: "var(--green)" },
+    ];
+    countsEl.innerHTML = counts.filter(c => c.n > 0).map(c =>
+      `<span><span class="count-dot" style="background:${c.color}"></span>${c.n}</span>`
+    ).join("");
+  }
+
+  // Render mini stats bar
   const statsEl = document.getElementById("sidebar-goal-stats");
-  if (statsEl && state.goals.length > 0) {
-    const total = state.goals.length;
-    const active = state.goals.filter(g => g.status === "active").length;
-    const complete = state.goals.filter(g => g.status === "complete").length;
-    const blocked = state.goals.filter(g => g.status === "blocked").length;
-    const failed = state.goals.filter(g => g.status === "failed").length;
+  if (statsEl && total > 0) {
     statsEl.innerHTML = [
       { count: complete, color: "var(--green)" },
       { count: active, color: "var(--blue)" },
@@ -60,29 +78,163 @@ export function renderSidebarGoals(): void {
     ].filter(s => s.count > 0).map(s =>
       `<div class="sidebar-goal-stats-seg" style="width: ${(s.count / total) * 100}%; background: ${s.color};"></div>`
     ).join("");
+  } else if (statsEl) {
+    statsEl.innerHTML = "";
   }
+
+  // Group goals by status, with priority ordering
+  const groups: { key: string; label: string; color: string; goals: Goal[] }[] = [
+    { key: "active", label: "Running", color: "var(--blue)", goals: state.goals.filter(g => g.status === "active") },
+    { key: "blocked", label: "Blocked", color: "var(--amber)", goals: state.goals.filter(g => g.status === "blocked") },
+    { key: "failed", label: "Failed", color: "var(--red)", goals: state.goals.filter(g => g.status === "failed") },
+    { key: "complete", label: "Done", color: "var(--green)", goals: state.goals.filter(g => g.status === "complete") },
+  ].filter(grp => grp.goals.length > 0);
 
   const ringCircumference = 2 * Math.PI * 7;
 
-  container.innerHTML = state.goals.map(g => {
-    const offset = ringCircumference - (g.progress / 100) * ringCircumference;
-    const ringClass = g.status === "blocked" ? "blocked" : g.status === "complete" ? "complete" : "";
-    return `
-      <div class="sidebar-goal" data-goal="${g.id}" data-status="${g.status}">
-        <svg class="progress-ring" viewBox="0 0 20 20">
-          <circle class="ring-bg" cx="10" cy="10" r="7" />
-          <circle class="ring-fill ${ringClass}" cx="10" cy="10" r="7"
-            stroke-dasharray="${ringCircumference}" stroke-dashoffset="${offset}" />
-        </svg>
-        <span class="sidebar-goal-name">${g.title}</span>
-        <span class="sidebar-goal-pct">${Math.round(g.progress)}%</span>
-      </div>
-    `;
-  }).join("");
+  // If only one group, skip group headers for cleanliness
+  if (groups.length <= 1) {
+    const goals = groups[0]?.goals ?? [];
+    container.innerHTML = goals.map(g => renderGoalRow(g, ringCircumference)).join("");
+  } else {
+    // Auto-collapse "Done" when there are active goals
+    if (active > 0 && !collapsedGroups.has("__init_done")) {
+      collapsedGroups.add("complete");
+      collapsedGroups.add("__init_done");
+    }
 
+    container.innerHTML = groups.map(grp => {
+      const isCollapsed = collapsedGroups.has(grp.key);
+      return `
+        <div class="sidebar-goal-group ${isCollapsed ? "collapsed" : ""}" data-group="${grp.key}">
+          <div class="sidebar-goal-group-header">
+            <span class="sidebar-goal-group-chevron">&#9660;</span>
+            <span class="sidebar-goal-group-dot" style="background: ${grp.color}"></span>
+            ${grp.label}
+            <span class="sidebar-goal-group-count">${grp.goals.length}</span>
+          </div>
+          <div class="sidebar-goal-group-items">
+            ${grp.goals.map(g => renderGoalRow(g, ringCircumference)).join("")}
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  // Wire click handlers
   container.querySelectorAll(".sidebar-goal").forEach(el => {
     el.addEventListener("click", () => openGoalDetail((el as HTMLElement).dataset.goal!));
   });
+
+  // Wire group collapse toggles (smooth max-height animation)
+  container.querySelectorAll(".sidebar-goal-group").forEach(groupEl => {
+    const items = groupEl.querySelector(".sidebar-goal-group-items") as HTMLElement | null;
+    if (items && !groupEl.classList.contains("collapsed")) {
+      items.style.maxHeight = items.scrollHeight + "px";
+    }
+  });
+  container.querySelectorAll(".sidebar-goal-group-header").forEach(el => {
+    el.addEventListener("click", () => {
+      const group = (el as HTMLElement).closest(".sidebar-goal-group") as HTMLElement;
+      const items = group.querySelector(".sidebar-goal-group-items") as HTMLElement;
+      const key = group.dataset.group!;
+      if (collapsedGroups.has(key)) {
+        collapsedGroups.delete(key);
+        group.classList.remove("collapsed");
+        items.style.maxHeight = items.scrollHeight + "px";
+      } else {
+        // Set explicit max-height first so transition works
+        items.style.maxHeight = items.scrollHeight + "px";
+        // Force reflow then collapse
+        items.offsetHeight; // eslint-disable-line @typescript-eslint/no-unused-expressions
+        collapsedGroups.add(key);
+        group.classList.add("collapsed");
+      }
+    });
+  });
+}
+
+function sidebarRelativeTime(ts: number): string {
+  const diff = Date.now() - ts;
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+/** Compact elapsed time like Codex: "2m 34s", "1h 03m" */
+function formatElapsed(startTs: number): string {
+  const diff = Math.max(0, Date.now() - startTs);
+  const s = Math.floor(diff / 1000) % 60;
+  const m = Math.floor(diff / 60_000) % 60;
+  const h = Math.floor(diff / 3_600_000);
+  if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+  if (m > 0) return `${m}m ${String(s).padStart(2, "0")}s`;
+  return `${s}s`;
+}
+
+/** Get the current running step for a goal (used as live activity subtitle) */
+function getCurrentActivity(g: Goal): string | null {
+  if (g.status !== "active") return null;
+  const running = g.steps.find(s => s.state === "running");
+  if (running) {
+    const detail = running.detail ? ` -- ${running.detail}` : "";
+    return `${running.name}${detail}`;
+  }
+  // Fallback: show latest tool call
+  if (g.toolCalls.length > 0) {
+    const latest = g.toolCalls[g.toolCalls.length - 1];
+    return latest.tool;
+  }
+  return null;
+}
+
+function renderGoalRow(g: Goal, ringCircumference: number): string {
+  const offset = ringCircumference - (g.progress / 100) * ringCircumference;
+  const ringClass = g.status === "blocked" ? "blocked"
+    : g.status === "failed" ? "failed"
+    : g.status === "complete" ? "complete" : "";
+
+  // Right side: status badge for blocked/failed, percentage + elapsed for active, time for done
+  const isActive = g.status === "active";
+  const elapsed = isActive && g.startedAt ? formatElapsed(g.startedAt) : "";
+  const ts = g.completedAt || g.startedAt;
+  const timeStr = !isActive && ts ? sidebarRelativeTime(ts) : "";
+
+  const rightSide = g.status === "blocked"
+    ? `<span class="sidebar-goal-status status-blocked">blocked</span>`
+    : g.status === "failed"
+    ? `<span class="sidebar-goal-status status-failed">failed</span>`
+    : `<span class="sidebar-goal-meta">
+        <span class="sidebar-goal-pct">${Math.round(g.progress)}%</span>
+        ${elapsed ? `<span class="sidebar-goal-time">${elapsed}</span>` : ""}
+        ${timeStr ? `<span class="sidebar-goal-time">${timeStr}</span>` : ""}
+      </span>`;
+
+  // Live activity subtitle for active goals (Codex-inspired status indicator)
+  const activity = getCurrentActivity(g);
+  const activityLine = activity
+    ? `<div class="sidebar-goal-activity">${activity}</div>`
+    : "";
+
+  return `
+    <div class="sidebar-goal" data-goal="${g.id}" data-status="${g.status}">
+      <svg class="progress-ring" viewBox="0 0 20 20">
+        <circle class="ring-bg" cx="10" cy="10" r="7" />
+        <circle class="ring-fill ${ringClass}" cx="10" cy="10" r="7"
+          stroke-dasharray="${ringCircumference}" stroke-dashoffset="${offset}" />
+      </svg>
+      <div class="sidebar-goal-content">
+        <div class="sidebar-goal-top">
+          <span class="sidebar-goal-name">${g.title}</span>
+          ${rightSide}
+        </div>
+        ${activityLine}
+      </div>
+    </div>
+  `;
 }
 
 export function renderNeedsYou(): void {
@@ -336,12 +488,23 @@ let activitySearchQuery = "";
 export function renderActivity(): void {
   const feed = document.getElementById("feed")!;
 
-  // Categorize events by parsing the HTML text
+  // Categorize events by parsing the HTML text (used for filtering + t3code-style tone colors)
   const categorize = (text: string): string => {
     if (text.includes("tool error") || text.includes("failed") || text.includes("Last error")) return "errors";
     if (text.includes("steering") || text.includes("steer")) return "steering";
     if (text.includes("retry") || text.includes("retrying")) return "retries";
     return "system";
+  };
+
+  // Map category to visual tone for left-border coloring
+  const toneOf = (text: string): string => {
+    const cat = categorize(text);
+    if (cat === "errors") return "error";
+    if (cat === "steering") return "steering";
+    if (cat === "retries") return "retry";
+    if (text.includes("completed") || text.includes("success") || text.includes("done")) return "success";
+    if (text.includes("tool") || text.includes("called") || text.includes("invoked")) return "tool";
+    return "";
   };
 
   const counts = { all: state.activityLog.length, errors: 0, steering: 0, retries: 0, system: 0 };
@@ -393,8 +556,9 @@ export function renderActivity(): void {
             ${bucket.label}
           </div>`;
         }
+        const tone = toneOf(ev.text);
         return `${header}
-          <div class="activity-item">
+          <div class="activity-item"${tone ? ` data-tone="${tone}"` : ""}>
             <span class="activity-time">${relativeTime(ev.time)}</span>
             <span class="activity-text">${ev.text}</span>
           </div>`;

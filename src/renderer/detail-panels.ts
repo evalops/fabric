@@ -1,32 +1,29 @@
 import { state, callbacks, saveTemplates } from './state';
-import { relativeTime, stringToColor, formatTokens, formatDuration } from './utils';
+import { relativeTime, stringToColor, formatTokens, formatDuration, renderDiff, renderThinkingBlock } from './utils';
 import { showToast } from './toasts';
 import type { Goal, ToolCallRecord } from './types';
 
-function renderToolBreakdown(toolCalls: ToolCallRecord[]): string {
-  if (toolCalls.length === 0) return "";
-  const breakdown: Record<string, { count: number; totalMs: number; errors: number }> = {};
-  for (const call of toolCalls) {
-    if (!breakdown[call.tool]) breakdown[call.tool] = { count: 0, totalMs: 0, errors: 0 };
-    breakdown[call.tool].count++;
-    breakdown[call.tool].totalMs += call.durationMs;
-    if (!call.success) breakdown[call.tool].errors++;
-  }
-  const sorted = Object.entries(breakdown).sort((a, b) => b[1].count - a[1].count);
-  return `
-    <div class="detail-section-title">Tool breakdown</div>
-    <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; font-size: 12px;">
-      ${sorted.map(([tool, stats]) => `
-        <div style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--bg-surface); border-radius: var(--radius-xs); border: 1px solid var(--border);">
-          <span style="font-weight: 600; min-width: 80px;">${tool}</span>
-          <span style="color: var(--text-muted);">${stats.count} call${stats.count !== 1 ? "s" : ""}</span>
-          <span style="color: var(--text-muted);">${Math.round(stats.totalMs / stats.count)}ms avg</span>
-          ${stats.errors > 0 ? `<span style="color: var(--red); margin-left: auto;">${stats.errors} error${stats.errors !== 1 ? "s" : ""}</span>` : `<span style="color: var(--green); margin-left: auto;">ok</span>`}
-        </div>
-      `).join("")}
-    </div>
-  `;
+// ── Tool categories for Cline-style grouped rendering ────
+const TOOL_CATEGORIES: Record<string, { label: string; priority: number }> = {
+  Read: { label: "File Access", priority: 1 },
+  Grep: { label: "File Access", priority: 1 },
+  Glob: { label: "File Access", priority: 1 },
+  Edit: { label: "Code Changes", priority: 0 },
+  Write: { label: "Code Changes", priority: 0 },
+  Bash: { label: "Shell", priority: 2 },
+  WebFetch: { label: "Network", priority: 3 },
+  LSP: { label: "Language Server", priority: 4 },
+};
+
+function getToolCategory(tool: string): string {
+  return TOOL_CATEGORIES[tool]?.label || "Other";
 }
+
+function getCategoryPriority(category: string): number {
+  const entry = Object.values(TOOL_CATEGORIES).find(c => c.label === category);
+  return entry?.priority ?? 99;
+}
+
 
 function renderObservabilityMeta(goal: Goal): string {
   const parts: string[] = [];
@@ -60,6 +57,132 @@ function renderObservabilityMeta(goal: Goal): string {
     `);
   }
   return parts.join("");
+}
+
+function renderContextBar(goal: Goal): string {
+  const totalTokens = goal.inputTokens + goal.outputTokens;
+  if (totalTokens === 0) return "";
+  // Estimate context window based on model (200K default)
+  const contextWindow = 200_000;
+  const inputPct = Math.min(100, (goal.inputTokens / contextWindow) * 100);
+  const outputPct = Math.min(100 - inputPct, (goal.outputTokens / contextWindow) * 100);
+  const totalPct = inputPct + outputPct;
+  const barColor = totalPct > 85 ? "var(--red)" : totalPct > 60 ? "var(--amber)" : "";
+
+  return `
+    <div class="context-bar">
+      <div class="context-bar-header">
+        <span class="context-bar-label">Context usage</span>
+        <span class="context-bar-value" ${barColor ? `style="color:${barColor}"` : ""}>${formatTokens(totalTokens)} / ${formatTokens(contextWindow)}</span>
+      </div>
+      <div class="context-bar-track">
+        <div class="context-bar-seg input" style="width: ${inputPct}%"></div>
+        <div class="context-bar-seg output" style="width: ${outputPct}%"></div>
+      </div>
+      <div class="context-bar-legend">
+        <span class="context-bar-legend-item"><span class="context-bar-legend-dot" style="background:var(--blue)"></span>Input ${formatTokens(goal.inputTokens)}</span>
+        <span class="context-bar-legend-item"><span class="context-bar-legend-dot" style="background:var(--accent)"></span>Output ${formatTokens(goal.outputTokens)}</span>
+        <span style="margin-left: auto; font-family: var(--font-mono);">${Math.round(totalPct)}%</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderToolGroups(toolCalls: ToolCallRecord[]): string {
+  if (toolCalls.length === 0) return "";
+
+  // Group by category
+  const groups: Record<string, { tools: Record<string, { count: number; totalMs: number; errors: number; lastCall: number; isRecent: boolean }> }> = {};
+
+  const now = Date.now();
+  for (const call of toolCalls) {
+    const cat = getToolCategory(call.tool);
+    if (!groups[cat]) groups[cat] = { tools: {} };
+    if (!groups[cat].tools[call.tool]) groups[cat].tools[call.tool] = { count: 0, totalMs: 0, errors: 0, lastCall: 0, isRecent: false };
+    const t = groups[cat].tools[call.tool];
+    t.count++;
+    t.totalMs += call.durationMs;
+    if (!call.success) t.errors++;
+    if (call.startedAt > t.lastCall) t.lastCall = call.startedAt;
+    if (now - call.startedAt < 60_000) t.isRecent = true;
+  }
+
+  // Sort categories by priority
+  const sortedCats = Object.entries(groups).sort((a, b) => getCategoryPriority(a[0]) - getCategoryPriority(b[0]));
+
+  // Determine which groups to auto-collapse (low-stakes file access with no errors)
+  return sortedCats.map(([cat, { tools }]) => {
+    const sortedTools = Object.entries(tools).sort((a, b) => b[1].count - a[1].count);
+    const totalCalls = sortedTools.reduce((s, [, t]) => s + t.count, 0);
+    const totalErrors = sortedTools.reduce((s, [, t]) => s + t.errors, 0);
+    const hasActive = sortedTools.some(([, t]) => t.isRecent);
+    const isLowStakes = cat === "File Access" && totalErrors === 0;
+
+    return `
+      <div class="tool-group ${isLowStakes && !hasActive ? "collapsed" : ""}" data-cat="${cat}">
+        <div class="tool-group-header">
+          <span class="tool-group-chevron">&#9660;</span>
+          ${cat}
+          <span class="tool-group-count">${totalCalls}${totalErrors > 0 ? ` / <span style="color:var(--red)">${totalErrors} err</span>` : ""}</span>
+        </div>
+        <div class="tool-group-items">
+          ${sortedTools.map(([tool, stats]) => {
+            const isActive = stats.isRecent;
+            const hasErr = stats.errors > 0;
+            return `<div class="tool-group-item ${isActive ? "active" : ""} ${hasErr ? "errored" : ""}">
+              <span class="tool-group-icon" style="color: ${hasErr ? "var(--red)" : isActive ? "var(--blue)" : "var(--green)"}">${hasErr ? "\u2717" : isActive ? "\u25cf" : "\u2713"}</span>
+              <span class="tool-group-name">${tool}</span>
+              <span class="tool-group-meta">${stats.count}x ${Math.round(stats.totalMs / stats.count)}ms</span>
+            </div>`;
+          }).join("")}
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderTurnStrip(goal: Goal): string {
+  if (goal.turnCount <= 1) return "";
+
+  // Build turn data from tool calls and timeline events
+  const turns: { idx: number; type: string; label: string; time: number }[] = [];
+  const toolsByTurn: Record<number, ToolCallRecord[]> = {};
+
+  // Group tool calls into approximate turns
+  const sortedCalls = [...goal.toolCalls].sort((a, b) => a.startedAt - b.startedAt);
+  let turnIdx = 0;
+  let lastTime = 0;
+  for (const call of sortedCalls) {
+    // New turn if >5 seconds gap
+    if (lastTime > 0 && call.startedAt - lastTime > 5000) turnIdx++;
+    if (!toolsByTurn[turnIdx]) toolsByTurn[turnIdx] = [];
+    toolsByTurn[turnIdx].push(call);
+    lastTime = call.startedAt;
+  }
+
+  for (const [idx, calls] of Object.entries(toolsByTurn)) {
+    const hasError = calls.some(c => !c.success);
+    const mainTool = calls[0].tool;
+    turns.push({
+      idx: Number(idx),
+      type: hasError ? "error" : "tool",
+      label: `T${Number(idx) + 1}: ${mainTool}${calls.length > 1 ? ` +${calls.length - 1}` : ""}`,
+      time: calls[0].startedAt,
+    });
+  }
+
+  if (turns.length <= 1) return "";
+
+  return `
+    <div class="turn-strip">
+      ${turns.map(t => `
+        <span class="turn-chip" data-turn="${t.idx}" title="${new Date(t.time).toLocaleTimeString()}">
+          <span class="turn-chip-dot ${t.type}"></span>
+          ${t.label}
+        </span>
+      `).join("")}
+    </div>
+  `;
 }
 
 function renderSteeringInput(goalId: string): string {
@@ -280,7 +403,7 @@ export function openGoalDetail(goalId: string): void {
     <div class="detail-back">\u2190 Back</div>
     <div class="detail-status-badge ${badgeClass}">${goal.status}</div>
     <div class="detail-title">${goal.title}</div>
-    <div class="detail-summary">${goal.summary}</div>
+    <div class="detail-summary">${goal.status === "active" ? `<span class="typewriter">${goal.summary}</span>` : goal.summary}</div>
 
     <div class="detail-meta">
       <div class="detail-meta-item">
@@ -313,9 +436,13 @@ export function openGoalDetail(goalId: string): void {
 
     ${renderSteeringInput(goal.id)}
 
+    <!-- Context window bar (Cline-inspired token usage visualization) -->
+    ${renderContextBar(goal)}
+
     <!-- Tabs -->
     <div class="detail-tabs">
       <button class="detail-tab active" data-tab="overview">Overview</button>
+      <button class="detail-tab" data-tab="reasoning">Reasoning <span class="detail-tab-badge">${(goal.thinking?.length || 0) + (goal.diffs?.length || 0)}</span></button>
       <button class="detail-tab" data-tab="tools">Tools <span class="detail-tab-badge">${toolCallCount}</span></button>
       <button class="detail-tab" data-tab="timeline">Timeline <span class="detail-tab-badge">${mergedTimeline.length}</span></button>
       <button class="detail-tab" data-tab="connections">Links <span class="detail-tab-badge">${goal.blockedBy.length + goal.enables.length + goal.insights.length}</span></button>
@@ -379,7 +506,20 @@ export function openGoalDetail(goalId: string): void {
       </div>
     </div>
 
-    <!-- Tools Tab -->
+    <!-- Reasoning Tab -->
+    <div class="detail-tab-content" data-tab-content="reasoning">
+      ${(!goal.thinking || goal.thinking.length === 0) && (!goal.diffs || goal.diffs.length === 0) ? `<div style="text-align: center; color: var(--text-muted); padding: 32px 0; font-size: 13px;">No reasoning or diffs captured yet</div>` : ""}
+      ${goal.thinking && goal.thinking.length > 0 ? `
+        <div class="detail-section-title">Agent reasoning</div>
+        ${goal.thinking.map((t, i) => renderThinkingBlock(t.agent, t.text, t.time, i > 0)).join("")}
+      ` : ""}
+      ${goal.diffs && goal.diffs.length > 0 ? `
+        <div class="detail-section-title">Changes</div>
+        ${goal.diffs.map(d => renderDiff(d.file, d.hunks)).join("")}
+      ` : ""}
+    </div>
+
+    <!-- Tools Tab (Cline-inspired grouped rendering) -->
     <div class="detail-tab-content" data-tab-content="tools">
       ${toolCallCount === 0 ? `<div style="text-align: center; color: var(--text-muted); padding: 32px 0; font-size: 13px;">No tool calls recorded yet</div>` : `
         <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px;">
@@ -396,8 +536,9 @@ export function openGoalDetail(goalId: string): void {
             <div style="font-size: 11px; color: var(--text-muted);">Avg latency</div>
           </div>
         </div>
-        ${renderToolBreakdown(goal.toolCalls)}
-        <div class="detail-section-title">Recent calls</div>
+        <div class="detail-section-title">By category</div>
+        ${renderToolGroups(goal.toolCalls)}
+        <div class="detail-section-title" style="margin-top: 16px;">Recent calls</div>
         <div style="display: flex; flex-direction: column; gap: 2px; font-size: 11px; max-height: 300px; overflow-y: auto;">
           ${[...goal.toolCalls].reverse().slice(0, 30).map(tc => `
             <div style="display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--radius-xs); background: ${tc.success ? "transparent" : "var(--red-soft)"};">
@@ -411,8 +552,9 @@ export function openGoalDetail(goalId: string): void {
       `}
     </div>
 
-    <!-- Timeline Tab -->
+    <!-- Timeline Tab (with t3code-inspired turn chip strip) -->
     <div class="detail-tab-content" data-tab-content="timeline">
+      ${renderTurnStrip(goal)}
       ${mergedTimeline.map(ev => `
         <div class="detail-timeline-item" style="${ev.cross ? "opacity: 0.55; border-left: 2px solid var(--border); padding-left: 10px; margin-left: -2px;" : ""}">
           <span class="detail-timeline-time">${relativeTime(ev.time)}</span>
@@ -500,6 +642,34 @@ export function openGoalDetail(goalId: string): void {
       const gid = (el as HTMLElement).dataset.goal;
       if (gid) { closeDetail(); setTimeout(() => openGoalDetail(gid), 200); }
     });
+  });
+
+  // Wire thinking block collapse toggles
+  panel.querySelectorAll(".thinking-header").forEach(header => {
+    header.addEventListener("click", () => {
+      const block = header.closest(".thinking-block")!;
+      block.classList.toggle("collapsed");
+    });
+  });
+
+  // Wire tool group collapse toggles
+  panel.querySelectorAll(".tool-group-header").forEach(header => {
+    header.addEventListener("click", () => {
+      const group = header.closest(".tool-group") as HTMLElement;
+      const items = group.querySelector(".tool-group-items") as HTMLElement;
+      if (group.classList.contains("collapsed")) {
+        group.classList.remove("collapsed");
+        items.style.maxHeight = items.scrollHeight + "px";
+      } else {
+        items.style.maxHeight = items.scrollHeight + "px";
+        items.offsetHeight; // force reflow
+        group.classList.add("collapsed");
+      }
+    });
+  });
+  // Set initial max-height for expanded tool groups
+  panel.querySelectorAll(".tool-group:not(.collapsed) .tool-group-items").forEach(items => {
+    (items as HTMLElement).style.maxHeight = (items as HTMLElement).scrollHeight + "px";
   });
 
   // Wire steering input

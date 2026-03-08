@@ -79,6 +79,19 @@ ipcMain.handle("fabric:steer-goal", async (_event, goalId: string, message: stri
   return { success: true };
 });
 
+// Send a chat message to the coordinator
+ipcMain.handle("fabric:chat", async (_event, text: string, threadId: string) => {
+  try {
+    // chat() streams responses via events — don't await the full completion
+    engine.chat(text, threadId).catch(err => {
+      console.error("Chat error:", err);
+    });
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+});
+
 // Update engine settings from renderer
 ipcMain.handle("fabric:update-settings", async (_event, settings: { apiKey?: string; model?: string; maxBudgetUsd?: number; maxTurns?: number }) => {
   if (settings.apiKey !== undefined) process.env.ANTHROPIC_API_KEY = settings.apiKey;

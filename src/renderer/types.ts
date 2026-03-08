@@ -43,6 +43,23 @@ export interface Goal {
   retryCount: number;
   lastError?: string;
   sessionId?: string;
+  // Agent reasoning and output
+  thinking?: ThinkingEntry[];
+  diffs?: DiffEntry[];
+}
+
+export interface ThinkingEntry {
+  time: number;
+  agent: string;
+  text: string;
+  collapsed?: boolean;
+}
+
+export interface DiffEntry {
+  file: string;
+  hunks: string;  // unified diff text
+  time: number;
+  agent?: string;
 }
 
 export interface Insight {
@@ -167,6 +184,7 @@ export interface FabricBridge {
   resumeGoal(goalId: string): Promise<{ success: boolean; error?: string }>;
   steerGoal(goalId: string, message: string): Promise<{ success: boolean }>;
   cancelGoal(goalId: string): Promise<{ success: boolean }>;
+  chat(text: string, threadId: string): Promise<{ success: boolean; error?: string }>;
   onEvent(callback: (event: any) => void): () => void;
   updateSettings(settings: Partial<FabricSettings>): Promise<{ success: boolean }>;
 }
@@ -178,6 +196,49 @@ export interface GoalTemplate {
   model?: string;
   maxBudgetUsd?: number;
   maxTurns?: number;
+  createdAt: number;
+}
+
+// ── Chat types (chat-first coordinator interface) ────
+export type ChatRole = "user" | "coordinator" | "system";
+export type ChatStatus = "sent" | "streaming" | "complete" | "error";
+
+export interface ChatAction {
+  label: string;
+  style: "primary" | "danger" | "default";
+  actionId: string;
+}
+
+export type ChatToolStatus = "running" | "done" | "error";
+
+export interface ChatToolCall {
+  tool: string;
+  status: ChatToolStatus;
+  input?: string;       // e.g. file path, command, pattern
+  output?: string;      // truncated result summary
+  durationMs?: number;
+  error?: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: ChatRole;
+  text: string;
+  timestamp: number;
+  status: ChatStatus;
+  agentSource?: string;
+  goalId?: string;
+  actions?: ChatAction[];
+  toolCalls?: ChatToolCall[];
+  costUsd?: number;
+  thinking?: string;
+}
+
+export interface ChatThread {
+  id: string;
+  messages: ChatMessage[];
+  isStreaming: boolean;
+  title?: string;
   createdAt: number;
 }
 

@@ -29,6 +29,14 @@ contextBridge.exposeInMainWorld("fabric", {
   steerGoal: (goalId: string, message: string) =>
     ipcRenderer.invoke("fabric:steer-goal", goalId, message),
 
+  // Send a chat message to the coordinator
+  chat: (text: string, threadId: string) =>
+    ipcRenderer.invoke("fabric:chat", text, threadId),
+
+  // Cancel an active goal
+  cancelGoal: (goalId: string) =>
+    ipcRenderer.invoke("fabric:pause-goal", goalId),
+
   // Listen for real-time events from the engine
   onEvent: (callback: (event: any) => void) => {
     const handler = (_event: any, data: any) => callback(data);
