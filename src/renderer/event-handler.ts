@@ -191,7 +191,18 @@ export function handleFabricEvent(event: any): void {
         badge.textContent = String(state.attentionItems.length);
         badge.style.display = "";
       }
-      if (state.currentView === "needs-you") renderNeedsYou();
+      // Urgent items auto-switch to "Needs you" view
+      const isUrgent = event.data.kind === "crit" || event.data.kind === "warn";
+      if (isUrgent) {
+        callbacks.switchView("needs-you");
+        showToast(
+          event.data.kind === "crit" ? "Agent blocked" : "Agent needs you",
+          event.data.title?.slice(0, 100) || "An agent needs your input",
+          event.data.kind === "crit" ? "var(--red)" : "var(--amber)",
+        );
+      } else if (state.currentView === "needs-you") {
+        renderNeedsYou();
+      }
       break;
     }
 
