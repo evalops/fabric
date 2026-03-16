@@ -93,7 +93,8 @@ export type FabricEventType =
   | "activity" | "attention" | "toast"
   | "agent-message" | "cost-update" | "tool-call"
   | "observability" | "steering" | "retry" | "compaction"
-  | "chat-text" | "chat-tool-start" | "chat-tool-end" | "chat-complete" | "chat-error";
+  | "chat-text" | "chat-tool-start" | "chat-tool-end" | "chat-complete" | "chat-error"
+  | "file-artifact";
 
 export interface FabricEvent {
   type: FabricEventType;
@@ -396,10 +397,16 @@ function createFileTools(): FabricToolDef[] {
       }),
       execute: async (args, ctx) => {
         const filePath = path.resolve(ctx.cwd, args.path as string);
+        const existed = fs.existsSync(filePath);
         const dir = path.dirname(filePath);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const bytes = (args.content as string).length;
         fs.writeFileSync(filePath, args.content as string, "utf-8");
-        return `Wrote ${(args.content as string).length} bytes to ${filePath}`;
+        ctx.engine.emit("fabric-event", {
+          type: "file-artifact", goalId: ctx.goalId,
+          data: { path: filePath, action: existed ? "modified" : "created", sizeBytes: bytes, time: Date.now() },
+        });
+        return `Wrote ${bytes} bytes to ${filePath}`;
       },
     },
     {
@@ -417,7 +424,12 @@ function createFileTools(): FabricToolDef[] {
         const occurrences = content.split(oldStr).length - 1;
         if (occurrences === 0) return `Error: "${oldStr.slice(0, 60)}..." not found in ${filePath}`;
         if (occurrences > 1) return `Error: "${oldStr.slice(0, 60)}..." appears ${occurrences} times — must be unique`;
-        fs.writeFileSync(filePath, content.replace(oldStr, args.new_string as string), "utf-8");
+        const newContent = content.replace(oldStr, args.new_string as string);
+        fs.writeFileSync(filePath, newContent, "utf-8");
+        ctx.engine.emit("fabric-event", {
+          type: "file-artifact", goalId: ctx.goalId,
+          data: { path: filePath, action: "modified", sizeBytes: newContent.length, time: Date.now() },
+        });
         return `Edited ${filePath}`;
       },
     },

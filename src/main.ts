@@ -147,6 +147,17 @@ ipcMain.handle("fabric:resolve-attention", async (_event, questionId: string, re
   return { success: resolved };
 });
 
+// Read a file's contents for download/preview
+ipcMain.handle("fabric:read-file", async (_event, filePath: string) => {
+  try {
+    const content = fs.readFileSync(filePath, "utf-8");
+    const stat = fs.statSync(filePath);
+    return { success: true, content, sizeBytes: stat.size, name: path.basename(filePath) };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+});
+
 // ── Forward engine events to renderer ─────────────────
 
 engine.on("fabric-event", (event: FabricEvent) => {

@@ -446,6 +446,7 @@ export function openGoalDetail(goalId: string): void {
       <button class="detail-tab" data-tab="tools">Tools <span class="detail-tab-badge">${toolCallCount}</span></button>
       <button class="detail-tab" data-tab="timeline">Timeline <span class="detail-tab-badge">${mergedTimeline.length}</span></button>
       <button class="detail-tab" data-tab="connections">Links <span class="detail-tab-badge">${goal.blockedBy.length + goal.enables.length + goal.insights.length}</span></button>
+      ${(goal.files?.length || 0) > 0 ? `<button class="detail-tab" data-tab="files">Files <span class="detail-tab-badge">${goal.files!.length}</span></button>` : ""}
     </div>
 
     <!-- Overview Tab -->
@@ -610,6 +611,35 @@ export function openGoalDetail(goalId: string): void {
         <div style="text-align: center; color: var(--text-muted); padding: 32px 0; font-size: 13px;">No dependencies or insights linked</div>
       ` : ""}
     </div>
+
+    <!-- Files Tab -->
+    ${(goal.files?.length || 0) > 0 ? `
+    <div class="detail-tab-content" data-tab-content="files">
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        ${(goal.files || []).map((f: { path: string; action: string; sizeBytes?: number; time: number }) => {
+          const name = f.path.split("/").pop() || f.path;
+          const ext = name.includes(".") ? name.split(".").pop() : "";
+          const sizeLabel = f.sizeBytes ? (f.sizeBytes > 1024 ? `${(f.sizeBytes / 1024).toFixed(1)} KB` : `${f.sizeBytes} B`) : "";
+          return `<div class="file-artifact-row" style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-sm); transition: border-color 0.15s;">
+            <div style="width: 32px; height: 32px; border-radius: var(--radius-xs); background: var(--accent-soft); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="var(--accent)" stroke-width="1.5"><path d="M9 1H4a1 1 0 00-1 1v12a1 1 0 001 1h8a1 1 0 001-1V5L9 1z"/><path d="M9 1v4h4"/></svg>
+            </div>
+            <div style="flex: 1; min-width: 0;">
+              <div style="font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${f.path}">${name}</div>
+              <div style="font-size: 11px; color: var(--text-muted); display: flex; gap: 8px;">
+                <span>${f.action}</span>
+                ${ext ? `<span>.${ext}</span>` : ""}
+                ${sizeLabel ? `<span>${sizeLabel}</span>` : ""}
+                <span>${relativeTime(f.time)}</span>
+              </div>
+            </div>
+            <button class="btn btn-primary file-download-btn" data-path="${f.path}" style="padding: 4px 10px; font-size: 11px; flex-shrink: 0;">Download</button>
+            <button class="btn file-view-btn" data-path="${f.path}" style="padding: 4px 10px; font-size: 11px; flex-shrink: 0;">View</button>
+          </div>`;
+        }).join("")}
+      </div>
+    </div>
+    ` : ""}
   `;
 
   overlay.classList.add("open");
@@ -739,6 +769,60 @@ export function openGoalDetail(goalId: string): void {
       (saveTemplateBtn as HTMLButtonElement).textContent = "Saved";
     });
   }
+
+  // Wire file download buttons
+  panel.querySelectorAll(".file-download-btn").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const filePath = (btn as HTMLElement).dataset.path!;
+      const bridge = (window as any).fabric;
+      if (!bridge?.readFile) return;
+      const result = await bridge.readFile(filePath);
+      if (result.success) {
+        const blob = new Blob([result.content], { type: "application/octet-stream" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = result.name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast("Downloaded", result.name, "var(--green)");
+      } else {
+        showToast("Download failed", result.error, "var(--red)");
+      }
+    });
+  });
+
+  // Wire file view buttons — opens content in a modal-like overlay
+  panel.querySelectorAll(".file-view-btn").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const filePath = (btn as HTMLElement).dataset.path!;
+      const bridge = (window as any).fabric;
+      if (!bridge?.readFile) return;
+      const result = await bridge.readFile(filePath);
+      if (result.success) {
+        const name = result.name;
+        const pre = document.createElement("div");
+        pre.style.cssText = "position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:40px;";
+        pre.innerHTML = `<div style="background:var(--bg-base);border:1px solid var(--border);border-radius:var(--radius);max-width:720px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:var(--shadow-lg);">
+          <div style="display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border);gap:8px;">
+            <span style="font-weight:600;font-size:14px;flex:1;">${name}</span>
+            <span style="font-size:11px;color:var(--text-muted);">${result.sizeBytes > 1024 ? (result.sizeBytes / 1024).toFixed(1) + " KB" : result.sizeBytes + " B"}</span>
+            <button class="btn" style="padding:4px 10px;font-size:11px;" id="file-view-close">Close</button>
+          </div>
+          <pre style="flex:1;overflow:auto;padding:16px;margin:0;font-family:var(--font-mono);font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all;color:var(--text-primary);">${result.content.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}</pre>
+        </div>`;
+        document.body.appendChild(pre);
+        pre.addEventListener("click", (ev) => { if (ev.target === pre) pre.remove(); });
+        pre.querySelector("#file-view-close")!.addEventListener("click", () => pre.remove());
+      } else {
+        showToast("View failed", result.error, "var(--red)");
+      }
+    });
+  });
 }
 
 export function closeDetail(): void {

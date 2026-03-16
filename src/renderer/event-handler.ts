@@ -190,6 +190,16 @@ export function handleFabricEvent(event: any): void {
       if (state.currentView === "activity") renderActivity();
       break;
     }
+    case "file-artifact": {
+      const fileGoal = state.goals.find(g => g.id === event.goalId);
+      if (fileGoal) {
+        if (!fileGoal.files) fileGoal.files = [];
+        fileGoal.files.push(event.data);
+      }
+      // Update views that show files
+      if (state.currentView === "all-work") renderAllWork();
+      break;
+    }
     case "attention": {
       state.attentionItems.push(event.data);
       const badge = document.getElementById("attention-count");

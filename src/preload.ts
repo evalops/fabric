@@ -53,6 +53,10 @@ contextBridge.exposeInMainWorld("fabric", {
   resolveAttention: (questionId: string, response: string) =>
     ipcRenderer.invoke("fabric:resolve-attention", questionId, response),
 
+  // Read a file for download/preview
+  readFile: (filePath: string) =>
+    ipcRenderer.invoke("fabric:read-file", filePath),
+
   // Update engine settings
   updateSettings: (settings: { apiKey?: string; model?: string; maxBudgetUsd?: number; maxTurns?: number; provider?: string }) =>
     ipcRenderer.invoke("fabric:update-settings", settings),

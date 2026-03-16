@@ -46,6 +46,14 @@ export interface Goal {
   // Agent reasoning and output
   thinking?: ThinkingEntry[];
   diffs?: DiffEntry[];
+  files?: FileArtifact[];
+}
+
+export interface FileArtifact {
+  path: string;
+  action: "created" | "modified";
+  sizeBytes?: number;
+  time: number;
 }
 
 export interface ThinkingEntry {
