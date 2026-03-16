@@ -4,6 +4,7 @@ import { renderAllWork, renderActivity, renderNeedsYou } from './views';
 import { renderCosts } from './view-costs';
 import { renderGraph } from './view-graph';
 import { renderAgents } from './view-agents';
+import { deriveAgentsFromGoals } from './renderer';
 import type { ChatToolCall } from './types';
 
 export function handleFabricEvent(event: any): void {
@@ -36,10 +37,12 @@ export function handleFabricEvent(event: any): void {
           diffs: newGoal.diffs || [],
         });
       }
+      deriveAgentsFromGoals();
       callbacks.renderSidebarGoals();
       callbacks.renderTitleStatus();
       if (state.currentView === "all-work") renderAllWork();
       if (state.currentView === "graph") renderGraph();
+      if (state.currentView === "agents") renderAgents();
       break;
     }
     case "goal-updated": {
@@ -60,6 +63,7 @@ export function handleFabricEvent(event: any): void {
         if (data.sessionId !== undefined) existing.sessionId = data.sessionId;
         if (data.completedAt !== undefined) existing.completedAt = data.completedAt;
       }
+      deriveAgentsFromGoals();
       callbacks.renderSidebarGoals();
       callbacks.renderTitleStatus();
       if (state.currentView === "all-work") renderAllWork();
@@ -68,9 +72,11 @@ export function handleFabricEvent(event: any): void {
       break;
     }
     case "step-updated": {
+      deriveAgentsFromGoals();
       callbacks.renderSidebarGoals();
       if (state.currentView === "all-work") renderAllWork();
       if (state.currentView === "graph") renderGraph();
+      if (state.currentView === "agents") renderAgents();
       break;
     }
     case "activity": {

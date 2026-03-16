@@ -417,7 +417,7 @@ async function loadRealData(): Promise<void> {
  * Since the engine doesn't manage a separate agent registry,
  * we infer agents from the names referenced in goal execution.
  */
-function deriveAgentsFromGoals(): void {
+export function deriveAgentsFromGoals(): void {
   const agentMap = new Map<string, {
     goals: Set<string>;
     tasks: number;
