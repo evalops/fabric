@@ -1,4 +1,4 @@
-import { state, getTotalCost, callbacks } from './state';
+import { state, getTotalCost, callbacks, bridge } from './state';
 import { relativeTime, formatDuration, debounce } from './utils';
 import { showToast } from './toasts';
 import { openGoalDetail } from './detail-panels';
@@ -243,17 +243,57 @@ export function renderNeedsYou(): void {
   if (state.attentionItems.length === 0) {
     const working = state.agents.filter(a => a.status === "working").length;
     const activeGoals = state.goals.filter(g => g.status === "active").length;
+    const totalGoals = state.goals.length;
+    const completedGoals = state.goals.filter(g => g.status === "complete").length;
+    const totalCost = state.goals.reduce((s, g) => s + g.costUsd, 0);
+
+    const statusLine = working > 0
+      ? `<strong>${working}</strong> agent${working > 1 ? "s" : ""} working on <strong>${activeGoals}</strong> goal${activeGoals > 1 ? "s" : ""}`
+      : totalGoals > 0
+        ? `${completedGoals}/${totalGoals} goals completed`
+        : "No goals yet. Create one with <kbd>Cmd+K</kbd>";
+
     feed.innerHTML = `
-      <div class="empty-state">
-        <div class="empty-state-icon" style="font-size: 48px; margin-bottom: 8px;">\u2713</div>
-        <div class="empty-state-text" style="font-size: 15px; font-weight: 600; margin-bottom: 8px;">All clear</div>
-        <div style="font-size: 13px; color: var(--text-muted); max-width: 320px; line-height: 1.5;">
-          Nothing needs your attention right now.
-          ${working > 0 ? `<strong>${working}</strong> agent${working > 1 ? "s are" : " is"} actively working on <strong>${activeGoals}</strong> goal${activeGoals > 1 ? "s" : ""}.` : "All agents are idle."}
+      <div class="empty-state-hero">
+        <div class="hero-orb">
+          <div class="hero-orb-ring hero-orb-ring-1"></div>
+          <div class="hero-orb-ring hero-orb-ring-2"></div>
+          <div class="hero-orb-ring hero-orb-ring-3"></div>
+          <div class="hero-orb-core">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 6L9 17l-5-5"/>
+            </svg>
+          </div>
         </div>
-        <div style="margin-top: 16px; display: flex; gap: 8px;">
-          <button class="empty-action-btn" data-action="all-work" style="padding: 6px 14px; font-size: 12px; background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent); border-radius: var(--radius-sm); cursor: pointer; font-family: var(--font-sans);">View all work</button>
-          <button class="empty-action-btn" data-action="agents" style="padding: 6px 14px; font-size: 12px; background: var(--bg-surface); color: var(--text-secondary); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; font-family: var(--font-sans);">View agents</button>
+
+        <div class="hero-title">All systems nominal</div>
+        <div class="hero-subtitle">${statusLine}</div>
+
+        ${totalGoals > 0 ? `
+        <div class="hero-metrics">
+          <div class="hero-metric">
+            <div class="hero-metric-value">${totalGoals}</div>
+            <div class="hero-metric-label">goals</div>
+          </div>
+          <div class="hero-metric-divider"></div>
+          <div class="hero-metric">
+            <div class="hero-metric-value">${completedGoals}</div>
+            <div class="hero-metric-label">complete</div>
+          </div>
+          <div class="hero-metric-divider"></div>
+          <div class="hero-metric">
+            <div class="hero-metric-value">$${totalCost.toFixed(2)}</div>
+            <div class="hero-metric-label">spent</div>
+          </div>
+        </div>` : ""}
+
+        <div class="hero-actions">
+          <button class="hero-btn hero-btn-primary empty-action-btn" data-action="chat">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+            Start a conversation
+          </button>
+          <button class="hero-btn empty-action-btn" data-action="all-work">View all work</button>
+          <button class="hero-btn empty-action-btn" data-action="costs">Cost overview</button>
         </div>
       </div>
     `;
@@ -286,35 +326,70 @@ export function renderNeedsYou(): void {
         <div class="attention-label">${item.label}</div>
         <div class="attention-title">${item.title}</div>
         <div class="attention-body">${item.body}</div>
-        <div class="attention-context">${item.context}</div>
+        ${item.context ? `<div class="attention-context">${item.context}</div>` : ""}
+        <div class="attention-response-row">
+          <input class="attention-input" type="text" placeholder="Type a response..." data-id="${item.id}" />
+          <button class="btn btn-primary attention-send-btn" data-id="${item.id}">Send</button>
+        </div>
         <div class="attention-actions">
-          ${item.actions.map(a => `<button class="btn ${a.style}" data-action="${a.label}">${a.label}</button>`).join("")}
+          ${item.actions.map(a => `<button class="btn ${a.style}" data-action="${a.label}" data-id="${item.id}">${a.label}</button>`).join("")}
         </div>
       </div>
     `).join("")}
   `;
 
+  const respondAndDismiss = (itemId: string, response: string) => {
+    const card = feed.querySelector(`.attention-card[data-id="${itemId}"]`) as HTMLElement | null;
+    if (card) card.classList.add("dismissed");
+
+    // Send response to engine via bridge
+    if (bridge?.resolveAttention) {
+      bridge.resolveAttention(itemId, response);
+    }
+
+    setTimeout(() => {
+      state.attentionItems = state.attentionItems.filter(i => i.id !== itemId);
+      const badge = document.getElementById("attention-count");
+      if (badge) {
+        badge.textContent = String(state.attentionItems.length);
+        if (state.attentionItems.length === 0) badge.style.display = "none";
+      }
+      if (state.attentionItems.length === 0 && state.currentView === "needs-you") renderNeedsYou();
+    }, 350);
+
+    state.activityLog.unshift({ time: Date.now(), text: `<strong>you</strong> responded: "${response}"` });
+    showToast("Response sent", `Answered: "${response.slice(0, 60)}"`, "var(--accent)");
+  };
+
+  // Quick-action buttons
   feed.querySelectorAll(".btn[data-action]").forEach(btn => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      const card = (e.currentTarget as HTMLElement).closest(".attention-card") as HTMLElement;
       const action = (e.currentTarget as HTMLElement).dataset.action!;
-      const itemId = card.dataset.id!;
-      const title = card.querySelector(".attention-title")?.textContent || "";
-      card.classList.add("dismissed");
-      // Remove from state after animation
-      setTimeout(() => {
-        state.attentionItems = state.attentionItems.filter(i => i.id !== itemId);
-        const badge = document.getElementById("attention-count");
-        if (badge) {
-          badge.textContent = String(state.attentionItems.length);
-          if (state.attentionItems.length === 0) badge.style.display = "none";
-        }
-        // Re-render if all dismissed
-        if (state.attentionItems.length === 0 && state.currentView === "needs-you") renderNeedsYou();
-      }, 350);
-      state.activityLog.unshift({ time: Date.now(), text: `<strong>you</strong> chose "${action}" on "${title}"` });
-      showToast("Action taken", `You chose "${action}" on "${title}"`, "var(--accent)");
+      const itemId = (e.currentTarget as HTMLElement).dataset.id!;
+      respondAndDismiss(itemId, action);
+    });
+  });
+
+  // Free-text response
+  feed.querySelectorAll(".attention-send-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const itemId = (btn as HTMLElement).dataset.id!;
+      const input = feed.querySelector(`.attention-input[data-id="${itemId}"]`) as HTMLInputElement;
+      if (input && input.value.trim()) {
+        respondAndDismiss(itemId, input.value.trim());
+      }
+    });
+  });
+
+  // Enter key on input
+  feed.querySelectorAll(".attention-input").forEach(input => {
+    input.addEventListener("keydown", (e) => {
+      if ((e as KeyboardEvent).key === "Enter") {
+        const el = e.currentTarget as HTMLInputElement;
+        const itemId = el.dataset.id!;
+        if (el.value.trim()) respondAndDismiss(itemId, el.value.trim());
+      }
     });
   });
 }

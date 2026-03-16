@@ -1,8 +1,36 @@
-import { state, DEFAULT_SETTINGS, saveSettings, saveTemplates } from './state';
+import { state, DEFAULT_SETTINGS, saveSettings, saveTemplates, bridge } from './state';
+import type { ModelInfo } from './types';
 
 type SettingsTab = "general" | "security" | "governance" | "notifications" | "templates" | "data";
 
 let activeTab: SettingsTab = "general";
+
+// Model catalog loaded from engine (pi-ai)
+let modelCatalog: ModelInfo[] = [];
+let modelCatalogLoaded = false;
+
+async function ensureModelCatalog(): Promise<void> {
+  if (modelCatalogLoaded) return;
+  if (bridge?.getModels) {
+    try {
+      modelCatalog = await bridge.getModels();
+      modelCatalogLoaded = true;
+    } catch { /* fall through to empty */ }
+  }
+}
+
+/** Group models by org for the optgroup selector */
+function groupModelsByOrg(models: ModelInfo[]): Record<string, ModelInfo[]> {
+  const groups: Record<string, ModelInfo[]> = {};
+  for (const m of models) {
+    if (!groups[m.org]) groups[m.org] = [];
+    groups[m.org].push(m);
+  }
+  return groups;
+}
+
+// Prioritized orgs shown first in the selector
+const PRIORITY_ORGS = ["anthropic", "openai", "google", "meta-llama", "deepseek", "mistralai", "x-ai", "qwen"];
 
 function showSettingsSaved(): void {
   const el = document.querySelector(".settings-saved");
@@ -62,6 +90,53 @@ function escHtml(s: string): string {
 
 // ── Tab Content Renderers ──────────────────────────────
 
+function renderModelSelector(): string {
+  if (!modelCatalogLoaded || modelCatalog.length === 0) {
+    // Fallback: simple text input for model ID
+    return `<input class="settings-input mono" id="settings-model" type="text" placeholder="anthropic/claude-sonnet-4-6" value="${escHtml(state.settings.model)}" />`;
+  }
+
+  // Group by org, with priority orgs first
+  const groups = groupModelsByOrg(modelCatalog);
+  const orgKeys = Object.keys(groups).sort((a, b) => {
+    const aPri = PRIORITY_ORGS.indexOf(a);
+    const bPri = PRIORITY_ORGS.indexOf(b);
+    if (aPri >= 0 && bPri >= 0) return aPri - bPri;
+    if (aPri >= 0) return -1;
+    if (bPri >= 0) return 1;
+    return a.localeCompare(b);
+  });
+
+  const optgroups = orgKeys.map(org => {
+    const models = groups[org].sort((a, b) => a.name.localeCompare(b.name));
+    const options = models.map(m => {
+      const costLabel = m.costInput > 0 ? ` ($${m.costInput.toFixed(1)}/$${m.costOutput.toFixed(1)})` : " (free)";
+      const badges = [
+        m.reasoning ? "R" : "",
+        m.vision ? "V" : "",
+      ].filter(Boolean).join("");
+      const badgeStr = badges ? ` [${badges}]` : "";
+      const selected = state.settings.model === m.id ? " selected" : "";
+      return `<option value="${m.id}"${selected}>${escHtml(m.name)}${costLabel}${badgeStr}</option>`;
+    }).join("");
+    const orgLabel = org.charAt(0).toUpperCase() + org.slice(1);
+    return `<optgroup label="${escHtml(orgLabel)}">${options}</optgroup>`;
+  }).join("");
+
+  return `
+    <input class="settings-input" id="settings-model-search" type="text" placeholder="Search 243 models..." style="margin-bottom: 6px; font-size: 12px;" />
+    <select class="settings-select" id="settings-model" style="max-width: 360px;">
+      ${optgroups}
+    </select>
+    <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
+      ${(() => {
+        const m = modelCatalog.find(m => m.id === state.settings.model);
+        if (!m) return "";
+        return `${m.name} &middot; ${(m.contextWindow / 1000).toFixed(0)}k ctx &middot; $${m.costInput.toFixed(2)}/$${m.costOutput.toFixed(2)} per 1M tokens`;
+      })()}
+    </div>`;
+}
+
 function renderGeneralTab(): string {
   const masked = state.settings.apiKey ? "\u2022".repeat(8) + state.settings.apiKey.slice(-4) : "";
   return `
@@ -82,16 +157,14 @@ function renderGeneralTab(): string {
     <div class="settings-card">
       <div class="settings-card-header">
         <div class="settings-card-title">API Configuration</div>
-        <div class="settings-card-desc">Configure your Anthropic API key for agent execution</div>
+        <div class="settings-card-desc">Connect via OpenRouter for access to 200+ models from all major providers</div>
       </div>
-      ${settingsRow("API Key", "Your Anthropic API key. Stored locally, never sent anywhere except the Anthropic API.", `
-        <input class="settings-input mono" id="settings-api-key" type="password" placeholder="sk-ant-..." value="${masked}" />
+      ${settingsRow("OpenRouter API Key", "Your OpenRouter API key. Get one at openrouter.ai/keys. Stored locally.", `
+        <input class="settings-input mono" id="settings-api-key" type="password" placeholder="sk-or-v1-..." value="${masked}" />
       `)}
-      ${settingsRow("Model", "Default model used for orchestration and subagents", selectControl("settings-model", state.settings.model, [
-        { value: "claude-opus-4-6", label: "Claude Opus 4.6" },
-        { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
-        { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
-      ]))}
+      ${settingsRow("Model", "Default model for orchestration and chat. Cost shown per 1M tokens (input/output). [R]=reasoning, [V]=vision.",
+        renderModelSelector()
+      )}
     </div>
 
     <div class="settings-card">
@@ -368,7 +441,7 @@ function wireGeneralTab(): void {
     });
   });
 
-  // API Key
+  // API Key (OpenRouter)
   const apiKeyInput = document.getElementById("settings-api-key") as HTMLInputElement | null;
   if (apiKeyInput) {
     let apiKeyFocused = false;
@@ -389,7 +462,49 @@ function wireGeneralTab(): void {
     });
   }
 
+  // Model selector — wired as a standard select, plus search filtering
   wireSelect("settings-model", v => { state.settings.model = v; });
+
+  // Model search filter — filters options in the <select> as user types
+  const searchInput = document.getElementById("settings-model-search") as HTMLInputElement | null;
+  const modelSelect = document.getElementById("settings-model") as HTMLSelectElement | null;
+  if (searchInput && modelSelect) {
+    // Cache all options for filtering
+    const allOptions: { el: HTMLOptionElement; text: string; group: HTMLOptGroupElement | null }[] = [];
+    modelSelect.querySelectorAll("option").forEach(opt => {
+      allOptions.push({
+        el: opt as HTMLOptionElement,
+        text: (opt.textContent || "").toLowerCase(),
+        group: opt.parentElement?.tagName === "OPTGROUP" ? opt.parentElement as HTMLOptGroupElement : null,
+      });
+    });
+
+    searchInput.addEventListener("input", () => {
+      const query = searchInput.value.toLowerCase().trim();
+      const visibleGroups = new Set<HTMLOptGroupElement>();
+
+      for (const item of allOptions) {
+        const show = !query || item.text.includes(query) || item.el.value.toLowerCase().includes(query);
+        item.el.style.display = show ? "" : "none";
+        if (show && item.group) visibleGroups.add(item.group);
+      }
+
+      // Hide empty optgroups
+      modelSelect.querySelectorAll("optgroup").forEach(g => {
+        (g as HTMLElement).style.display = visibleGroups.has(g as HTMLOptGroupElement) || !query ? "" : "none";
+      });
+    });
+  }
+
+  // If model catalog wasn't loaded yet, load it and re-render
+  if (!modelCatalogLoaded) {
+    ensureModelCatalog().then(() => {
+      if (modelCatalogLoaded && activeTab === "general") {
+        renderSettings();
+      }
+    });
+  }
+
   wireNumber("settings-budget", v => { state.settings.maxBudgetUsd = v; }, DEFAULT_SETTINGS.maxBudgetUsd);
   wireNumber("settings-max-turns", v => { state.settings.maxTurns = v; }, DEFAULT_SETTINGS.maxTurns);
   wireCheckbox("settings-agent-messages", v => { state.settings.showAgentMessages = v; });

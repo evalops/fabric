@@ -2,15 +2,30 @@ import { state, getTotalCost, getTotalTokens } from './state';
 import { formatTokens, formatDuration, stringToColor, sparkline } from './utils';
 import { openGoalDetail } from './detail-panels';
 
-// Model-aware pricing (per 1M tokens) — mirrors ENGINE MODEL_PRICING
-const MODEL_PRICING: Record<string, { input: number; output: number; label: string }> = {
-  "claude-sonnet-4-6":  { input: 3.00,  output: 15.00, label: "Sonnet" },
-  "claude-opus-4-6":    { input: 15.00, output: 75.00, label: "Opus" },
-  "claude-haiku-4-5-20251001":   { input: 0.80,  output: 4.00,  label: "Haiku" },
-};
+// Dynamic pricing — reads from model catalog via bridge, falls back to Sonnet defaults
+let _cachedModelInfo: { id: string; input: number; output: number; label: string } | null = null;
 
 function getModelPricing(): { input: number; output: number; label: string } {
-  return MODEL_PRICING[state.settings.model] || MODEL_PRICING["claude-sonnet-4-6"];
+  const currentModel = state.settings.model;
+  // Check cache
+  if (_cachedModelInfo && _cachedModelInfo.id === currentModel) {
+    return _cachedModelInfo;
+  }
+  // Try to load from bridge (async population — will be available after first settings tab visit)
+  const bridge = (window as any).fabric;
+  if (bridge?.getModels) {
+    bridge.getModels().then((models: { id: string; name: string; costInput: number; costOutput: number }[]) => {
+      const m = models.find((m: { id: string }) => m.id === currentModel);
+      if (m) {
+        _cachedModelInfo = { id: currentModel, input: m.costInput, output: m.costOutput, label: m.name };
+      }
+    }).catch(() => {});
+  }
+  // Return cached or default
+  if (_cachedModelInfo && _cachedModelInfo.id === currentModel) return _cachedModelInfo;
+  // Extract a short label from the model ID
+  const shortLabel = currentModel.includes("/") ? currentModel.split("/").pop()! : currentModel;
+  return { input: 3.00, output: 15.00, label: shortLabel };
 }
 
 export function renderCosts(): void {

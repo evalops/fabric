@@ -1,7 +1,34 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import * as path from "path";
+import * as fs from "fs";
 import { FabricEngine } from "./fabric";
 import type { FabricEvent } from "./fabric";
+
+// Load .env file from project root
+function loadEnv(): void {
+  try {
+    const envPath = path.join(__dirname, "..", ".env");
+    if (!fs.existsSync(envPath)) return;
+    const lines = fs.readFileSync(envPath, "utf-8").split("\n");
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eqIdx = trimmed.indexOf("=");
+      if (eqIdx < 0) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      let val = trimmed.slice(eqIdx + 1).trim();
+      // Strip surrounding quotes
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      if (key && val && !process.env[key]) {
+        process.env[key] = val;
+      }
+    }
+  } catch { /* .env loading is best-effort */ }
+}
+
+loadEnv();
 
 let mainWindow: BrowserWindow | null = null;
 const engine = new FabricEngine();
@@ -93,10 +120,31 @@ ipcMain.handle("fabric:chat", async (_event, text: string, threadId: string) => 
 });
 
 // Update engine settings from renderer
-ipcMain.handle("fabric:update-settings", async (_event, settings: { apiKey?: string; model?: string; maxBudgetUsd?: number; maxTurns?: number }) => {
-  if (settings.apiKey !== undefined) process.env.ANTHROPIC_API_KEY = settings.apiKey;
+ipcMain.handle("fabric:update-settings", async (_event, settings: { apiKey?: string; model?: string; maxBudgetUsd?: number; maxTurns?: number; provider?: string }) => {
+  // Set API keys based on provider
+  if (settings.apiKey !== undefined) {
+    const provider = settings.provider || "anthropic";
+    const envMap: Record<string, string> = {
+      anthropic: "ANTHROPIC_API_KEY",
+      openai: "OPENAI_API_KEY",
+      openrouter: "OPENROUTER_API_KEY",
+    };
+    const envVar = envMap[provider] || "ANTHROPIC_API_KEY";
+    process.env[envVar] = settings.apiKey;
+  }
   engine.updateSettings(settings);
   return { success: true };
+});
+
+// Get available models from the engine (populated from pi-ai catalog)
+ipcMain.handle("fabric:get-models", async () => {
+  return engine.getAvailableModels();
+});
+
+// Resolve a HITL attention question
+ipcMain.handle("fabric:resolve-attention", async (_event, questionId: string, response: string) => {
+  const resolved = engine.resolveAttention(questionId, response);
+  return { success: resolved };
 });
 
 // ── Forward engine events to renderer ─────────────────

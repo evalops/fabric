@@ -109,6 +109,7 @@ export interface ActivityEvent {
 export interface FabricSettings {
   apiKey: string;
   model: string;
+  provider: string;
   theme: "light" | "dark" | "system";
   maxBudgetUsd: number;
   maxTurns: number;
@@ -175,6 +176,18 @@ export interface FabricSettings {
   auditWebhookUrl: string;
 }
 
+export interface ModelInfo {
+  id: string;
+  name: string;
+  provider: string;
+  org: string;
+  costInput: number;
+  costOutput: number;
+  contextWindow: number;
+  reasoning: boolean;
+  vision: boolean;
+}
+
 export interface FabricBridge {
   createGoal(descriptionOrOpts: string | { description: string; model?: string; maxBudgetUsd?: number; maxTurns?: number }): Promise<{ success: boolean; goalId?: string; error?: string }>;
   createBatchGoals(descriptions: string[], opts?: { model?: string; maxBudgetUsd?: number; maxTurns?: number }): Promise<{ success: boolean; batchId?: string; goalIds?: string[]; error?: string }>;
@@ -186,6 +199,8 @@ export interface FabricBridge {
   cancelGoal(goalId: string): Promise<{ success: boolean }>;
   chat(text: string, threadId: string): Promise<{ success: boolean; error?: string }>;
   onEvent(callback: (event: any) => void): () => void;
+  getModels(): Promise<ModelInfo[]>;
+  resolveAttention(questionId: string, response: string): Promise<{ success: boolean }>;
   updateSettings(settings: Partial<FabricSettings>): Promise<{ success: boolean }>;
 }
 
