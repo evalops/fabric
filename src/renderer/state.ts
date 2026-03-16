@@ -5,7 +5,8 @@ const TEMPLATES_KEY = "fabric:templates:v1";
 
 export const DEFAULT_SETTINGS: FabricSettings = {
   apiKey: "",
-  model: "claude-sonnet-4-6",
+  model: "anthropic/claude-sonnet-4.6",
+  provider: "openrouter",
   theme: "light",
   maxBudgetUsd: 2.00,
   maxTurns: 30,
@@ -74,9 +75,8 @@ export const state = {
   templates: loadTemplates(),
   settings: loadSettings(),
   darkMode: false,
-  demoMode: !bridge,
+  demoMode: false,
   currentView: "chat",
-  simIdx: 0,
   cmdkSelectedIdx: 0,
   chatThread: {
     id: "thread-1",
@@ -109,6 +109,7 @@ export function saveSettings(): void {
     bridge.updateSettings({
       apiKey: state.settings.apiKey,
       model: state.settings.model,
+      provider: "openrouter",
       maxBudgetUsd: state.settings.maxBudgetUsd,
       maxTurns: state.settings.maxTurns,
       toolAllowlist: state.settings.toolAllowlist,

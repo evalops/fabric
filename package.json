@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc -p tsconfig.main.json && node esbuild.renderer.mjs && cp src/renderer/index.html dist/renderer/ && cp src/renderer/styles.css dist/renderer/",
+    "build": "node esbuild.main.mjs && node esbuild.renderer.mjs && cp src/renderer/index.html dist/renderer/ && cp src/renderer/styles.css dist/renderer/",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.json --noEmit",
     "start": "npm run build && electron .",
     "dev": "npm run start"
   },
@@ -19,7 +20,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.71",
+    "@mariozechner/pi-ai": "^0.58.3",
     "pg": "^8.20.0"
   }
 }

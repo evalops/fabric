@@ -5,7 +5,6 @@ import type { Goal, CmdkAction } from './types';
 import { state, bridge, callbacks, applyTheme, toggleDarkMode, getTotalCost } from './state';
 import { formatTokens } from './utils';
 import { showToast } from './toasts';
-import { initMockData, simulateTick } from './mock-data';
 import { openGoalDetail, openAgentDetail, closeDetail } from './detail-panels';
 import { renderTitleStatus, renderSidebarGoals, renderNeedsYou, renderAllWork, renderActivity } from './views';
 import { renderAgents } from './view-agents';
@@ -195,37 +194,20 @@ function init(): void {
   callbacks.renderChat = renderChat;
   callbacks.sendChatMessage = sendChatMessage;
 
-  if (state.demoMode) {
-    // No engine connected — load mock data and run simulation
-    initMockData();
-  } else {
-    // Real engine connected — load live data
-    loadRealData();
-  }
+  // Always use real data — no demo/mock mode
+  loadRealData();
+
+  state.demoMode = false; // never use mocks
 
   applyTheme(state.settings.theme);
   renderTitleStatus();
   renderSidebarGoals();
 
-  // Chat is the default view — hide header and render
-  const viewHeader = document.querySelector(".view-header") as HTMLElement;
-  if (viewHeader) viewHeader.style.display = "none";
-  renderChat();
+  // Always open to chat
+  switchView("chat");
 
   // Set initial footer values
   updateFooter();
-
-  // Show demo mode indicator
-  if (state.demoMode) {
-    const titlebar = document.querySelector(".titlebar-subtitle");
-    if (titlebar) titlebar.textContent = "Demo mode";
-    const connIndicator = document.getElementById("connection-indicator");
-    if (connIndicator) {
-      connIndicator.classList.add("disconnected");
-      const label = connIndicator.querySelector(".connection-label");
-      if (label) label.textContent = "Demo";
-    }
-  }
 
   // Refresh sidebar elapsed times periodically (only when there are active goals)
   setInterval(() => {
@@ -372,16 +354,7 @@ function init(): void {
     bridge.onEvent((event: any) => handleFabricEvent(event));
   }
 
-  // Demo simulation — only when no engine connected
-  if (state.demoMode) {
-    setInterval(() => {
-      simulateTick();
-      if (state.currentView === "costs") renderCosts();
-      if (state.currentView === "agents") renderAgents();
-      if (state.currentView === "graph") renderGraph();
-      if (state.currentView === "activity") renderActivity();
-    }, 4000);
-  }
+  // No demo simulation — real data only
 }
 
 // ── Real Data Loading ────────────────────────────────

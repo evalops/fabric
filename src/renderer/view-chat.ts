@@ -113,16 +113,9 @@ function renderToolCallCards(calls: ChatToolCall[]): string {
 
 let autoScroll = true;
 let scrollCleanup: (() => void) | null = null;
-let demoSimInterval: ReturnType<typeof setInterval> | null = null;
-
 /** Stop the current streaming response. */
 export function stopStreaming(): void {
   if (!state.chatThread.isStreaming) return;
-  // Clear demo simulation if running
-  if (demoSimInterval) {
-    clearInterval(demoSimInterval);
-    demoSimInterval = null;
-  }
   // Finalize the streaming message
   const streamMsg = state.chatThread.messages.find(
     m => m.role === "coordinator" && m.status === "streaming"
@@ -223,9 +216,7 @@ function renderEmptyState(): string {
     <div class="chat-empty">
       <div class="chat-empty-icon"><svg width="48" height="48" viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="20" stroke="var(--border-lit)" stroke-width="2"/><circle cx="24" cy="20" r="6" stroke="var(--text-muted)" stroke-width="2"/><path d="M12 38c0-6.63 5.37-12 12-12s12 5.37 12 12" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round"/></svg></div>
       <div class="chat-empty-title">What should we work on?</div>
-      <div class="chat-empty-sub">${state.demoMode
-        ? "Demo mode \u00b7 Simulated responses"
-        : `${working} of ${totalAgents} agents active \u00b7 Ready to coordinate`}</div>
+      <div class="chat-empty-sub">${working} of ${totalAgents} agents active &middot; Ready to coordinate</div>
       <div class="chat-suggestions">
         ${suggestions.map(s => `
           <div class="chat-suggestion" data-text="${escapeHtml(s.text)}">
@@ -431,7 +422,7 @@ function renderChatInput(): string {
         ${sendOrStop}
       </div>
       <div class="chat-input-footer">
-        <span class="chat-input-model">${state.demoMode ? "demo" : state.settings.model || "sonnet-4"}</span>
+        <span class="chat-input-model">${state.settings.model || "sonnet-4"}</span>
         <span class="chat-input-hint">${state.chatThread.messages.length > 0 ? `<button id="chat-new-thread" class="chat-new-btn" title="New chat">New chat</button>` : ""}<kbd>${isStreaming ? "Esc" : "Cmd+K"}</kbd> ${isStreaming ? "stop" : "commands"}</span>
       </div>
     </div>
@@ -489,74 +480,7 @@ export function sendChatMessage(text: string): void {
       // Otherwise, chat-text / chat-tool-start / chat-tool-end / chat-complete
       // events will stream in via event-handler.ts and update streamMsg
     });
-  } else {
-    // ── Demo mode: simulate response with progressive tool calls ──
-    simulateResponse(streamMsg, text);
   }
-}
-
-/** Simulate a coordinator response for demo mode (no engine connected). */
-function simulateResponse(streamMsg: ChatMessage, text: string): void {
-  const response = getSimulatedResponse(text);
-  const allTools = response.toolCalls || [];
-  let toolIdx = 0;
-  let charIdx = 0;
-  let phase: "thinking" | "tools" | "text" = response.thinking ? "thinking" : (allTools.length > 0 ? "tools" : "text");
-  let phaseTimer = 0;
-
-  if (response.thinking) {
-    streamMsg.thinking = response.thinking;
-  }
-
-  demoSimInterval = setInterval(() => {
-    phaseTimer++;
-
-    if (phase === "thinking") {
-      if (phaseTimer > 8) {
-        phase = allTools.length > 0 ? "tools" : "text";
-        phaseTimer = 0;
-      }
-    } else if (phase === "tools") {
-      if (phaseTimer % 6 === 0 && toolIdx < allTools.length) {
-        if (!streamMsg.toolCalls) streamMsg.toolCalls = [];
-        const tc = { ...allTools[toolIdx], status: "running" as const };
-        streamMsg.toolCalls.push(tc);
-        if (streamMsg.toolCalls.length > 1) {
-          const prev = streamMsg.toolCalls[streamMsg.toolCalls.length - 2];
-          prev.status = allTools[toolIdx - 1].status;
-          prev.output = allTools[toolIdx - 1].output;
-          prev.error = allTools[toolIdx - 1].error;
-          prev.durationMs = allTools[toolIdx - 1].durationMs;
-        }
-        toolIdx++;
-      }
-      if (toolIdx >= allTools.length && phaseTimer > toolIdx * 6 + 4) {
-        if (streamMsg.toolCalls && streamMsg.toolCalls.length > 0) {
-          const last = streamMsg.toolCalls[streamMsg.toolCalls.length - 1];
-          const lastOrig = allTools[allTools.length - 1];
-          last.status = lastOrig.status;
-          last.output = lastOrig.output;
-          last.error = lastOrig.error;
-          last.durationMs = lastOrig.durationMs;
-        }
-        phase = "text";
-        phaseTimer = 0;
-      }
-    } else {
-      const chunk = response.text.slice(charIdx, charIdx + 3 + Math.floor(Math.random() * 5));
-      streamMsg.text += chunk;
-      charIdx += chunk.length;
-
-      if (charIdx >= response.text.length) {
-        if (demoSimInterval) { clearInterval(demoSimInterval); demoSimInterval = null; }
-        streamMsg.status = "complete";
-        streamMsg.goalId = response.goalId;
-        streamMsg.costUsd = response.costUsd;
-        state.chatThread.isStreaming = false;
-      }
-    }
-    renderChat();
-  }, 30);
 }
 
 function appendMessage(msg: ChatMessage): void {
@@ -569,99 +493,3 @@ function appendMessage(msg: ChatMessage): void {
   });
 }
 
-function getSimulatedResponse(userText: string): {
-  text: string; toolCalls?: ChatToolCall[]; goalId?: string; costUsd?: number; thinking?: string;
-} {
-  const q = userText.toLowerCase();
-
-  if (q.includes("status") || q.includes("what's") || q.includes("overview")) {
-    const active = state.goals.filter(g => g.status === "active");
-    const blocked = state.goals.filter(g => g.status === "blocked");
-    const working = state.agents.filter(a => a.status === "working").length;
-    let text = `Here's the current status:\n\n`;
-    text += `**${active.length} active goals**, ${blocked.length} blocked. ${working} agents are working right now.\n\n`;
-    active.forEach(g => {
-      text += `- **${g.title}** -- ${Math.round(g.progress)}% complete, $${g.costUsd.toFixed(2)} spent\n`;
-    });
-    if (blocked.length > 0) {
-      text += `\nBlocked:\n`;
-      blocked.forEach(g => {
-        text += `- **${g.title}** -- ${g.summary}\n`;
-      });
-    }
-    return {
-      text,
-      toolCalls: [
-        { tool: "Read", status: "done", input: "state.goals", output: `${active.length + blocked.length} goals loaded`, durationMs: 12 },
-        { tool: "Grep", status: "done", input: "status=blocked", output: `${blocked.length} blocked goals found`, durationMs: 45 },
-      ],
-      costUsd: 0.03,
-      thinking: "User wants a status overview. Let me check all active and blocked goals, count working agents, and summarize the situation concisely.",
-    };
-  }
-
-  if (q.includes("deploy")) {
-    return {
-      text: `I'll coordinate the deployment. Here's my plan:\n\n1. **Validate build** -- build-validator will verify artifacts\n2. **Run tests** -- test-runner will execute the full integration suite\n3. **Canary deploy** -- deploy-orchestrator will start at 5% traffic\n4. **Monitor** -- observability will watch error rates for 15 minutes\n5. **Full rollout** -- if metrics are healthy, roll out to 100%\n\nShall I proceed? I'll keep you updated at each step.`,
-      toolCalls: [
-        { tool: "Read", status: "done", input: "deploy/canary-config.yaml", output: "Current canary weight: 0%, version: v2.2.1", durationMs: 18 },
-        { tool: "Bash", status: "done", input: "git log --oneline -5", output: "5 commits since last deploy", durationMs: 340 },
-        { tool: "Grep", status: "done", input: "version in package.json", output: "v2.3.0", durationMs: 8 },
-        { tool: "Read", status: "done", input: "deploy/rollback-plan.md", output: "Rollback procedure verified", durationMs: 14 },
-      ],
-      costUsd: 0.08,
-      goalId: "g1",
-      thinking: "User wants a deployment. I need to coordinate build-validator, test-runner, deploy-orchestrator, and observability agents in sequence. Let me lay out the plan first before executing.",
-    };
-  }
-
-  if (q.includes("security") || q.includes("audit")) {
-    return {
-      text: `Starting a security audit. I'm delegating to:\n\n- **security-scanner** to scan all production packages\n- **vuln-analyst** to triage any CVEs found\n- **patch-agent** to auto-patch safe updates\n\nLast audit found 2 critical CVEs and patched 14 packages. I'll report back when results are in.`,
-      toolCalls: [
-        { tool: "Bash", status: "done", input: "npm audit --json", output: "847 packages scanned, 19 advisories", durationMs: 4200 },
-        { tool: "Read", status: "done", input: "security/last-audit.json", output: "Previous audit: 2 critical, 5 high", durationMs: 11 },
-        { tool: "WebFetch", status: "done", input: "nvd.nist.gov/vuln/search", output: "3 new CVEs since last scan", durationMs: 1800 },
-        { tool: "Bash", status: "done", input: "npm ls --depth=0 --json", output: "142 direct dependencies", durationMs: 920 },
-      ],
-      costUsd: 0.12,
-      thinking: "Security audit request. I'll spin up the security pipeline: scanner first, then triage, then auto-patching. This follows the same pattern as the last successful audit.",
-    };
-  }
-
-  if (q.includes("billing") || q.includes("anomaly")) {
-    return {
-      text: `The billing investigation is ongoing. Here's where we are:\n\n**3 suspicious clusters** found in Q1 transaction data:\n1. Duplicate charges 30s apart (merchant M-4821) -- likely a payment gateway retry bug\n2. Missing promo discounts (merchant M-9102) -- started March 1st\n3. Stuck refunds (merchant M-1150) -- 12 refunds in pending state\n\nThe anomaly-detector is narrowing down root causes. Want me to prioritize any of these?`,
-      goalId: "g2",
-      toolCalls: [
-        { tool: "Read", status: "done", input: "db/queries/transactions.sql", output: "142K rows queried", durationMs: 24 },
-        { tool: "Grep", status: "done", input: "merchant_id IN (M-4821, M-9102, M-1150)", output: "847 flagged transactions", durationMs: 180 },
-        { tool: "Bash", status: "error", input: "psql -c 'SELECT ...' billing_db", error: "Connection timeout, retried", durationMs: 5200 },
-        { tool: "Bash", status: "done", input: "psql -c 'SELECT ...' billing_db", output: "3 anomaly clusters identified", durationMs: 3100 },
-      ],
-      costUsd: 0.05,
-    };
-  }
-
-  if (q.includes("fix") || q.includes("bug") || q.includes("error") || q.includes("code")) {
-    return {
-      text: "I found the issue. The error handler wasn't catching async rejections properly. Here's the fix:\n\n```typescript\nasync function handleRequest(req: Request): Promise<Response> {\n  try {\n    const result = await processRequest(req);\n    return new Response(JSON.stringify(result), { status: 200 });\n  } catch (err) {\n    console.error(\"Request failed:\", err);\n    return new Response(\n      JSON.stringify({ error: err.message }),\n      { status: 500 }\n    );\n  }\n}\n```\n\nThe key change is wrapping the entire handler in a try/catch instead of relying on `.catch()` chains. This also handles synchronous throws from `processRequest`.\n\nI've also added a test:\n\n```typescript\nit(\"returns 500 on processing failure\", async () => {\n  const req = new Request(\"/api/test\");\n  const res = await handleRequest(req);\n  expect(res.status).toBe(500);\n});\n```\n\nShall I apply this to the codebase?",
-      toolCalls: [
-        { tool: "Grep", status: "done", input: "handleRequest", output: "Found in src/server/handler.ts:42", durationMs: 32 },
-        { tool: "Read", status: "done", input: "src/server/handler.ts", output: "146 lines, async handler with .catch() pattern", durationMs: 18 },
-        { tool: "Edit", status: "done", input: "src/server/handler.ts:42-58", output: "Replaced .catch() with try/catch", durationMs: 24 },
-      ],
-      costUsd: 0.04,
-      thinking: "The user is reporting a bug. Let me search for the error handler and examine the async flow. The issue is likely unhandled promise rejections.",
-    };
-  }
-
-  // Default response
-  return {
-    text: `I understand. Let me work on that.\n\nI'll coordinate the right agents and keep you posted on progress. You can check the **Activity** or **Agents** view for real-time observability.`,
-    toolCalls: [
-      { tool: "Read", status: "done", input: "project context", durationMs: 15 },
-    ],
-    costUsd: 0.02,
-  };
-}

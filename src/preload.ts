@@ -45,7 +45,15 @@ contextBridge.exposeInMainWorld("fabric", {
     return () => ipcRenderer.removeListener("fabric:event", handler);
   },
 
+  // Get available models from pi-ai catalog
+  getModels: () =>
+    ipcRenderer.invoke("fabric:get-models"),
+
+  // Resolve a HITL attention question (human responds to agent)
+  resolveAttention: (questionId: string, response: string) =>
+    ipcRenderer.invoke("fabric:resolve-attention", questionId, response),
+
   // Update engine settings
-  updateSettings: (settings: { apiKey?: string; model?: string; maxBudgetUsd?: number; maxTurns?: number }) =>
+  updateSettings: (settings: { apiKey?: string; model?: string; maxBudgetUsd?: number; maxTurns?: number; provider?: string }) =>
     ipcRenderer.invoke("fabric:update-settings", settings),
 });
