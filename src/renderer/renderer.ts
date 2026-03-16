@@ -197,8 +197,6 @@ function init(): void {
   // Always use real data — no demo/mock mode
   loadRealData();
 
-  state.demoMode = false; // never use mocks
-
   applyTheme(state.settings.theme);
   renderTitleStatus();
   renderSidebarGoals();

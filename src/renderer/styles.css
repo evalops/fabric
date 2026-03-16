@@ -3452,6 +3452,13 @@ body.dark .chat-code-header {
 .chat-input-wrap.streaming .chat-input {
   color: var(--text-muted);
 }
+.chat-input-wrap.streaming .chat-input::placeholder {
+  animation: placeholderPulse 1.5s ease-in-out infinite;
+}
+@keyframes placeholderPulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+}
 
 /* New chat button */
 .chat-new-btn {

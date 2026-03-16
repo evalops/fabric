@@ -40,8 +40,10 @@ export function renderTitleStatus(): void {
   }
 }
 
-// Track which sidebar groups are collapsed (persists across re-renders)
+// Track which sidebar groups are collapsed (persists across re-renders + localStorage)
 const collapsedGroups = new Set<string>();
+const _storedGroups = localStorage.getItem("fabric:collapsed-groups");
+if (_storedGroups) try { JSON.parse(_storedGroups).forEach((g: string) => collapsedGroups.add(g)); } catch {}
 
 export function renderSidebarGoals(): void {
   const container = document.getElementById("sidebar-goals");
@@ -150,6 +152,7 @@ export function renderSidebarGoals(): void {
         collapsedGroups.add(key);
         group.classList.add("collapsed");
       }
+      localStorage.setItem("fabric:collapsed-groups", JSON.stringify([...collapsedGroups]));
     });
   });
 }
@@ -340,7 +343,13 @@ export function renderNeedsYou(): void {
 
   const respondAndDismiss = (itemId: string, response: string) => {
     const card = feed.querySelector(`.attention-card[data-id="${itemId}"]`) as HTMLElement | null;
-    if (card) card.classList.add("dismissed");
+    if (card) {
+      // Prevent double-submit: if already dismissed, bail out
+      if (card.classList.contains("dismissed")) return;
+      card.classList.add("dismissed");
+      // Disable send button and action buttons immediately
+      card.querySelectorAll("button").forEach(btn => (btn as HTMLButtonElement).disabled = true);
+    }
 
     // Send response to engine via bridge
     if (bridge?.resolveAttention) {

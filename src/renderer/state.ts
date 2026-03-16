@@ -75,7 +75,6 @@ export const state = {
   templates: loadTemplates(),
   settings: loadSettings(),
   darkMode: false,
-  demoMode: false,
   currentView: "chat",
   cmdkSelectedIdx: 0,
   chatThread: {

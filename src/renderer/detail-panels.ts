@@ -399,6 +399,9 @@ export function openGoalDetail(goalId: string): void {
   const mergedTimeline = [...goal.timeline.map(ev => ({ ...ev, cross: false })), ...crossActivity]
     .sort((a, b) => b.time - a.time);
 
+  // Clear old content to ensure old event listeners are garbage collected
+  panel.innerHTML = "";
+
   panel.innerHTML = `
     <div class="detail-back">\u2190 Back</div>
     <div class="detail-status-badge ${badgeClass}">${goal.status}</div>
@@ -818,6 +821,9 @@ export function openGoalDetail(goalId: string): void {
         document.body.appendChild(pre);
         pre.addEventListener("click", (ev) => { if (ev.target === pre) pre.remove(); });
         pre.querySelector("#file-view-close")!.addEventListener("click", () => pre.remove());
+        document.addEventListener("keydown", function handler(e) {
+          if (e.key === "Escape") { pre.remove(); document.removeEventListener("keydown", handler); }
+        });
       } else {
         showToast("View failed", result.error, "var(--red)");
       }
