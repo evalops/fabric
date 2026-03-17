@@ -1,8 +1,10 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import * as path from "path";
 import * as fs from "fs";
+import * as os from "os";
 import { FabricEngine } from "./fabric";
 import type { FabricEvent } from "./fabric";
+import { createMcpExtension, loadMcpConfig } from "./extensions/mcp";
 
 // Load .env file from project root
 function loadEnv(): void {
@@ -158,6 +160,31 @@ ipcMain.handle("fabric:read-file", async (_event, filePath: string) => {
   }
 });
 
+// ── MCP Server Management ─────────────────────────────
+
+const MCP_CONFIG_PATH = path.join(os.homedir(), ".fabric", "mcp-servers.json");
+const mcpClients: { name: string; client: import("@modelcontextprotocol/sdk/client/index.js").Client }[] = [];
+
+async function loadMcpServers(): Promise<void> {
+  const configs = loadMcpConfig(MCP_CONFIG_PATH);
+  if (configs.length === 0) return;
+
+  for (const config of configs) {
+    try {
+      const ext = await createMcpExtension(config);
+      engine.registerExtension(ext);
+      mcpClients.push({ name: config.name, client: ext.client });
+      console.log(`MCP: "${config.name}" connected (${ext.tools?.length || 0} tools)`);
+    } catch (err) {
+      console.error(`MCP: "${config.name}" failed to connect:`, err);
+    }
+  }
+}
+
+ipcMain.handle("fabric:get-mcp-servers", async () => {
+  return mcpClients.map(m => m.name);
+});
+
 // ── Forward engine events to renderer ─────────────────
 
 engine.on("fabric-event", (event: FabricEvent) => {
@@ -168,7 +195,16 @@ engine.on("fabric-event", (event: FabricEvent) => {
 
 // ── App Lifecycle ─────────────────────────────────────
 
-app.whenReady().then(createWindow);
+app.whenReady().then(async () => {
+  await loadMcpServers();
+  createWindow();
+});
+
+app.on("before-quit", async () => {
+  for (const { client } of mcpClients) {
+    try { await client.close(); } catch { /* best-effort cleanup */ }
+  }
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

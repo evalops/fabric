@@ -19,8 +19,7 @@ import type {
   Model,
   Api,
 } from "@mariozechner/pi-ai";
-// TypeBox TObject type — derived from Type.Object return type
-type TObject = ReturnType<typeof Type.Object>;
+import type { TSchema } from "@sinclair/typebox";
 import { EventEmitter } from "events";
 import * as fs from "fs";
 import * as path from "path";
@@ -304,7 +303,7 @@ function buildFallbackChain(primaryModelId: string): string[] {
 /** Call complete() with per-call timeout and abort signal */
 async function completeWithTimeout(
   model: Model<Api>,
-  context: { systemPrompt: string; messages: PiMessage[]; tools?: unknown[] },
+  context: { systemPrompt: string; messages: PiMessage[]; tools?: { name: string; description: string; parameters: TSchema }[] },
   signal?: AbortSignal,
 ): Promise<PiAssistantMessage> {
   const timeoutController = new AbortController();
@@ -346,21 +345,21 @@ function isRetryableError(err: Error): boolean {
 
 // ── Tool System ───────────────────────────────────────
 
-interface FabricToolDef {
+export interface FabricToolDef {
   name: string;
   description: string;
-  parameters: TObject;
+  parameters: TSchema;
   execute: (args: Record<string, unknown>, ctx: ToolContext) => Promise<string>;
 }
 
-interface ToolContext {
+export interface ToolContext {
   goalId: string;
   engine: FabricEngine;
   cwd: string;
 }
 
 /** Convert our tool defs to pi-ai Tool format */
-function toPiTools(tools: FabricToolDef[]): { name: string; description: string; parameters: TObject }[] {
+function toPiTools(tools: FabricToolDef[]): { name: string; description: string; parameters: TSchema }[] {
   return tools.map(t => ({
     name: t.name,
     description: t.description,
@@ -1104,7 +1103,7 @@ async function runOrchestrator(opts: OrchestratorOptions): Promise<OrchestratorR
   // Build handoff from executor's final state
   const executorText = messages
     .filter(m => (m as PiAssistantMessage).role === "assistant")
-    .flatMap(m => (m as PiAssistantMessage).content?.filter((c: { type: string }) => c.type === "text").map((c: { type: string; text: string }) => c.text) || [])
+    .flatMap(m => (m as PiAssistantMessage).content?.filter(c => c.type === "text").map(c => "text" in c ? c.text : "") || [])
     .pop() || "";
 
   const handoff: ExecutionHandoff = {

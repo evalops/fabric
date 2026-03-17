@@ -8,7 +8,7 @@
 
 import * as http from "http";
 import * as url from "url";
-import { FabricEngine, FabricEvent } from "./fabric";
+import { FabricEngine, FabricEvent, FabricGoal, ToolCallRecord } from "./fabric";
 import { FabricDB } from "./db/persistence";
 import { createWebhookExtension, WebhookConfig } from "./extensions/webhook";
 
@@ -82,33 +82,39 @@ engine.on("fabric-event", async (event: FabricEvent) => {
   try {
     switch (event.type) {
       case "goal-created":
-      case "goal-updated":
-        await db.upsertGoal(event.data);
-        if (event.data.steps?.length) {
-          await db.upsertSteps(event.data.id, event.data.steps);
+      case "goal-updated": {
+        const goalData = event.data as FabricGoal;
+        await db.upsertGoal(goalData);
+        if (goalData.steps?.length) {
+          await db.upsertSteps(goalData.id, goalData.steps);
         }
         break;
+      }
       case "tool-call":
-        await db.insertToolCall(event.data);
+        await db.insertToolCall(event.data as ToolCallRecord);
         break;
-      case "cost-update":
+      case "cost-update": {
+        const costData = event.data as { costUsd: number; inputTokens: number; outputTokens: number };
         if (event.goalId) {
           await db.insertCostEvent(
             event.goalId,
-            event.data.costUsd,
-            event.data.inputTokens,
-            event.data.outputTokens
+            costData.costUsd,
+            costData.inputTokens,
+            costData.outputTokens
           );
         }
         break;
-      case "activity":
+      }
+      case "activity": {
+        const actData = event.data as { text: string };
         await db.insertActivity(
           event.goalId || null,
           event.type,
-          event.data.text,
+          actData.text,
           "system"
         );
         break;
+      }
     }
   } catch (err) {
     console.error("DB persistence error:", err);

@@ -14,6 +14,6 @@
     "declarationMap": true,
     "sourceMap": true
   },
-  "include": ["src/main.ts", "src/preload.ts", "src/fabric.ts", "src/server.ts", "src/db/persistence.ts", "src/extensions/webhook.ts"],
+  "include": ["src/main.ts", "src/preload.ts", "src/fabric.ts", "src/server.ts", "src/db/persistence.ts", "src/extensions/webhook.ts", "src/extensions/mcp.ts"],
   "exclude": ["src/renderer"]
 }

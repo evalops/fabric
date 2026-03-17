@@ -23,51 +23,52 @@ export interface WebhookConfig {
   format?: "slack" | "discord" | "raw";
 }
 
-function formatSlackPayload(event: FabricEvent): any {
+function formatSlackPayload(event: FabricEvent): Record<string, unknown> {
   const goalId = event.goalId || "unknown";
+  const d = event.data as Record<string, unknown>;
   switch (event.type) {
     case "goal-created":
       return {
-        text: `New goal created: "${event.data.title}"`,
+        text: `New goal created: "${d.title}"`,
         blocks: [
           { type: "header", text: { type: "plain_text", text: "New Goal Created" } },
-          { type: "section", text: { type: "mrkdwn", text: `*${event.data.title}*\nGoal ID: \`${goalId}\`` } },
+          { type: "section", text: { type: "mrkdwn", text: `*${d.title}*\nGoal ID: \`${goalId}\`` } },
         ],
       };
     case "observability":
       return {
-        text: `Goal ${event.data.outcome}: ${event.data.turnCount} turns, $${event.data.totalCost?.toFixed(2)}`,
+        text: `Goal ${d.outcome}: ${d.turnCount} turns, $${(d.totalCost as number)?.toFixed(2)}`,
         blocks: [
-          { type: "header", text: { type: "plain_text", text: `Goal ${event.data.outcome === "success" ? "Completed" : "Finished"}` } },
+          { type: "header", text: { type: "plain_text", text: `Goal ${d.outcome === "success" ? "Completed" : "Finished"}` } },
           {
             type: "section",
             fields: [
-              { type: "mrkdwn", text: `*Outcome:* ${event.data.outcome}` },
-              { type: "mrkdwn", text: `*Turns:* ${event.data.turnCount}` },
-              { type: "mrkdwn", text: `*Cost:* $${event.data.totalCost?.toFixed(2)}` },
-              { type: "mrkdwn", text: `*Tool Calls:* ${event.data.toolCallCount}` },
+              { type: "mrkdwn", text: `*Outcome:* ${d.outcome}` },
+              { type: "mrkdwn", text: `*Turns:* ${d.turnCount}` },
+              { type: "mrkdwn", text: `*Cost:* $${(d.totalCost as number)?.toFixed(2)}` },
+              { type: "mrkdwn", text: `*Tool Calls:* ${d.toolCallCount}` },
             ],
           },
         ],
       };
     case "attention":
       return {
-        text: `Attention needed: ${event.data.title}`,
+        text: `Attention needed: ${d.title}`,
         blocks: [
           { type: "header", text: { type: "plain_text", text: "Attention Required" } },
-          { type: "section", text: { type: "mrkdwn", text: `*${event.data.title}*\n${event.data.body}` } },
+          { type: "section", text: { type: "mrkdwn", text: `*${d.title}*\n${d.body}` } },
         ],
       };
     case "retry":
       return {
-        text: `Retry attempt ${event.data.attempt}/${event.data.maxRetries}: ${event.data.error}`,
+        text: `Retry attempt ${d.attempt}/${d.maxRetries}: ${d.error}`,
       };
     default:
-      return { text: `[${event.type}] ${JSON.stringify(event.data).slice(0, 200)}` };
+      return { text: `[${event.type}] ${JSON.stringify(d).slice(0, 200)}` };
   }
 }
 
-function formatDiscordPayload(event: FabricEvent): any {
+function formatDiscordPayload(event: FabricEvent): Record<string, unknown> {
   const colorMap: Record<string, number> = {
     "goal-created": 0x5865F2,
     "observability": 0x57F287,
@@ -85,7 +86,7 @@ function formatDiscordPayload(event: FabricEvent): any {
   };
 }
 
-async function postWebhook(config: WebhookConfig, payload: any): Promise<void> {
+async function postWebhook(config: WebhookConfig, payload: Record<string, unknown>): Promise<void> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "User-Agent": "Fabric-Webhook/1.0",
@@ -141,11 +142,11 @@ export function createWebhookExtension(config: WebhookConfig): FabricExtension {
 
       // Filter by outcome (only applies to observability events)
       if (config.outcomes && event.type === "observability") {
-        if (!config.outcomes.includes(event.data.outcome)) return;
+        if (!config.outcomes.includes((event.data as Record<string, unknown>).outcome as GoalOutcome)) return;
       }
 
       // Format payload
-      let payload: any;
+      let payload: Record<string, unknown>;
       switch (config.format) {
         case "slack":
           payload = formatSlackPayload(event);
