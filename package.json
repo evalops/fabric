@@ -2,22 +2,65 @@
   "name": "fabric",
   "version": "1.0.0",
   "main": "dist/main.js",
+  "author": {
+    "name": "EvalOps",
+    "email": "jonathan@evalops.com"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "description": "Agent orchestration platform with MCP integration",
   "scripts": {
     "build": "node esbuild.main.mjs && node esbuild.renderer.mjs && cp src/renderer/index.html dist/renderer/ && cp src/renderer/styles.css dist/renderer/",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.json --noEmit",
     "start": "npm run build && electron .",
     "dev": "npm run start",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder --mac dmg",
+    "dist:install": "npm run dist && cp -r 'release/mac-arm64/Fabric.app' /Applications/ && echo 'Installed to /Applications/Fabric.app'"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "Agent Fabric - Reimagining Slack for AI agents",
+  "build": {
+    "appId": "com.evalops.fabric",
+    "productName": "Fabric",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "node_modules/**/*",
+      "!node_modules/**/*.ts",
+      "!node_modules/**/*.map",
+      "!node_modules/**/test/**",
+      "!node_modules/**/tests/**",
+      "!node_modules/**/__tests__/**",
+      "!node_modules/**/docs/**",
+      "!node_modules/**/example/**",
+      "!node_modules/**/examples/**"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64"]
+        }
+      ],
+      "darkModeSupport": true,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "title": "Fabric",
+      "artifactName": "Fabric-${version}.dmg"
+    }
+  },
   "devDependencies": {
     "@types/node": "^25.3.5",
     "@types/pg": "^8.18.0",
     "electron": "^40.8.0",
+    "electron-builder": "^26.8.1",
     "esbuild": "^0.27.3",
     "typescript": "^5.9.3",
     "vitest": "^4.1.0"
