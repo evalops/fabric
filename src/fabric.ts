@@ -1548,9 +1548,28 @@ You have tools to:
 When the user asks you to do something, TAKE ACTION with your tools. Don't just describe what they should do — actually do it.
 Be concise. Use tools first, then explain what happened.`;
 
-    // Truncate chat history to prevent unbounded growth
+    // Truncate chat history to prevent unbounded growth.
+    // Must cut at a user-message boundary to avoid orphaning toolResult messages
+    // that reference toolCall IDs from a discarded assistant message.
     if (this.chatMessages.length > 80) {
-      this.chatMessages = this.chatMessages.slice(-40);
+      const target = this.chatMessages.length - 40;
+      let cutIdx = target;
+      // Walk forward from target to find the next user message (safe boundary)
+      while (cutIdx < this.chatMessages.length) {
+        if ((this.chatMessages[cutIdx] as { role: string }).role === "user") break;
+        cutIdx++;
+      }
+      // If we couldn't find one after target, walk backward
+      if (cutIdx >= this.chatMessages.length) {
+        cutIdx = target;
+        while (cutIdx > 0) {
+          if ((this.chatMessages[cutIdx] as { role: string }).role === "user") break;
+          cutIdx--;
+        }
+      }
+      if (cutIdx > 0) {
+        this.chatMessages = this.chatMessages.slice(cutIdx);
+      }
     }
 
     // Add user message to chat history
@@ -1878,6 +1897,15 @@ Be concise. Use tools first, then explain what happened.`;
     if (settings.model !== undefined) {
       this.defaultModel = settings.model;
     }
+  }
+
+  /** Clear chat history — called when the user starts a new chat thread */
+  clearChatHistory(): void {
+    if (this.chatAbortController) {
+      this.chatAbortController.abort();
+      this.chatAbortController = undefined;
+    }
+    this.chatMessages = [];
   }
 
   pauseGoal(goalId: string): void {

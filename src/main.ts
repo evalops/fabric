@@ -108,6 +108,12 @@ ipcMain.handle("fabric:steer-goal", async (_event, goalId: string, message: stri
   return { success: true };
 });
 
+// Clear chat history (new thread)
+ipcMain.handle("fabric:clear-chat", async () => {
+  engine.clearChatHistory();
+  return { success: true };
+});
+
 // Send a chat message to the coordinator
 ipcMain.handle("fabric:chat", async (_event, text: string, threadId: string) => {
   try {

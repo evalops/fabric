@@ -401,6 +401,8 @@ export function renderChat(): void {
         createdAt: Date.now(),
       };
       autoScroll = true;
+      // Clear engine-side chat history so context doesn't bleed between threads
+      if (bridge) bridge.clearChat();
       renderChat();
     });
   }
@@ -444,6 +446,18 @@ function handleChatAction(actionId: string, _btnEl: HTMLElement): void {
 }
 
 export function sendChatMessage(text: string): void {
+  // Finalize any orphaned streaming messages from a previous aborted chat
+  state.chatThread.messages.forEach(m => {
+    if (m.role === "coordinator" && m.status === "streaming") {
+      m.status = "complete";
+      if (!m.text) m.text = "(interrupted)";
+      if (m.toolCalls) {
+        m.toolCalls.forEach(tc => { if (tc.status === "running") tc.status = "done"; });
+      }
+    }
+  });
+  state.chatThread.isStreaming = false;
+
   // Add user message
   appendMessage({
     id: `msg-${Date.now()}`,

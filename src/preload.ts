@@ -33,6 +33,10 @@ contextBridge.exposeInMainWorld("fabric", {
   chat: (text: string, threadId: string) =>
     ipcRenderer.invoke("fabric:chat", text, threadId),
 
+  // Clear chat history (start fresh thread)
+  clearChat: () =>
+    ipcRenderer.invoke("fabric:clear-chat"),
+
   // Cancel an active goal
   cancelGoal: (goalId: string) =>
     ipcRenderer.invoke("fabric:pause-goal", goalId),

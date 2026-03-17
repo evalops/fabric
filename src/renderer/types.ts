@@ -206,9 +206,11 @@ export interface FabricBridge {
   steerGoal(goalId: string, message: string): Promise<{ success: boolean }>;
   cancelGoal(goalId: string): Promise<{ success: boolean }>;
   chat(text: string, threadId: string): Promise<{ success: boolean; error?: string }>;
+  clearChat(): Promise<{ success: boolean }>;
   onEvent(callback: (event: any) => void): () => void;
   getModels(): Promise<ModelInfo[]>;
   resolveAttention(questionId: string, response: string): Promise<{ success: boolean }>;
+  readFile(filePath: string): Promise<{ success: boolean; content?: string; sizeBytes?: number; name?: string; error?: string }>;
   updateSettings(settings: Partial<FabricSettings>): Promise<{ success: boolean }>;
   getMcpServers(): Promise<{ connected: string[]; skipped: string[] }>;
 }
