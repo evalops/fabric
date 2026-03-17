@@ -355,14 +355,17 @@ function renderDataTab(): string {
 
 // ── MCP Servers Tab ───────────────────────────────────
 
-let mcpServers: string[] = [];
+let mcpConnected: string[] = [];
+let mcpSkipped: string[] = [];
 let mcpServersLoaded = false;
 
 async function ensureMcpServers(): Promise<void> {
   if (mcpServersLoaded) return;
   if (bridge?.getMcpServers) {
     try {
-      mcpServers = await bridge.getMcpServers();
+      const result = await bridge.getMcpServers();
+      mcpConnected = result.connected;
+      mcpSkipped = result.skipped;
       mcpServersLoaded = true;
     } catch { /* fall through */ }
   }
@@ -370,18 +373,31 @@ async function ensureMcpServers(): Promise<void> {
 
 function renderMcpTab(): string {
   const configPath = "~/.fabric/mcp-servers.json";
+  const hasAny = mcpConnected.length > 0 || mcpSkipped.length > 0;
 
-  const serverList = mcpServers.length > 0
-    ? `<div class="mcp-server-list">
-        ${mcpServers.map(name => `
-          <div class="mcp-server-row">
-            <span class="mcp-server-status connected"></span>
-            <span class="mcp-server-name">${escHtml(name)}</span>
-            <span class="mcp-server-badge">connected</span>
-          </div>
-        `).join("")}
-      </div>`
-    : `<div style="color: var(--text-muted); font-size: 13px; padding: 8px 0;">No MCP servers connected. Add servers to <code>${configPath}</code> and restart Fabric.</div>`;
+  const connectedList = mcpConnected.length > 0
+    ? mcpConnected.map(name => `
+        <div class="mcp-server-row">
+          <span class="mcp-server-status connected"></span>
+          <span class="mcp-server-name">${escHtml(name)}</span>
+          <span class="mcp-server-badge">connected</span>
+        </div>
+      `).join("")
+    : "";
+
+  const skippedList = mcpSkipped.length > 0
+    ? mcpSkipped.map(name => `
+        <div class="mcp-server-row">
+          <span class="mcp-server-status disconnected"></span>
+          <span class="mcp-server-name">${escHtml(name)}</span>
+          <span class="mcp-server-badge skipped">needs config</span>
+        </div>
+      `).join("")
+    : "";
+
+  const serverList = hasAny
+    ? `<div class="mcp-server-list">${connectedList}${skippedList}</div>`
+    : `<div style="color: var(--text-muted); font-size: 13px; padding: 8px 0;">No MCP servers configured. Add servers to <code>${configPath}</code> and restart Fabric.</div>`;
 
   return `
     <div class="settings-card">

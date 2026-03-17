@@ -169,20 +169,43 @@ async function loadMcpServers(): Promise<void> {
   const configs = loadMcpConfig(MCP_CONFIG_PATH);
   if (configs.length === 0) return;
 
-  for (const config of configs) {
-    try {
+  // Skip servers with placeholder env vars
+  const ready = configs.filter(config => {
+    const env = config.env || {};
+    const hasPlaceholder = Object.values(env).some(v => v === "REPLACE_ME");
+    if (hasPlaceholder) {
+      console.log(`MCP: "${config.name}" skipped (has REPLACE_ME env vars)`);
+      mcpSkipped.push(config.name);
+      return false;
+    }
+    return true;
+  });
+
+  // Connect all ready servers in parallel
+  const results = await Promise.allSettled(
+    ready.map(async config => {
       const ext = await createMcpExtension(config);
       engine.registerExtension(ext);
       mcpClients.push({ name: config.name, client: ext.client });
       console.log(`MCP: "${config.name}" connected (${ext.tools?.length || 0} tools)`);
-    } catch (err) {
-      console.error(`MCP: "${config.name}" failed to connect:`, err);
+    }),
+  );
+
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
+    if (result.status === "rejected") {
+      console.error(`MCP: "${ready[i].name}" failed to connect:`, result.reason);
     }
   }
 }
 
+const mcpSkipped: string[] = [];
+
 ipcMain.handle("fabric:get-mcp-servers", async () => {
-  return mcpClients.map(m => m.name);
+  return {
+    connected: mcpClients.map(m => m.name),
+    skipped: mcpSkipped,
+  };
 });
 
 // ── Forward engine events to renderer ─────────────────

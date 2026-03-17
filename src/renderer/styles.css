@@ -3846,6 +3846,10 @@ body.dark .hero-btn-primary {
   color: #22c55e;
   font-weight: 500;
 }
+.mcp-server-badge.skipped {
+  background: #f59e0b18;
+  color: #f59e0b;
+}
 .mcp-config-pre {
   background: var(--bg-hover);
   border: 1px solid var(--border);
