@@ -51,7 +51,7 @@ export interface McpServerConfig {
  * around arbitrary JSON Schema — pi-ai's Tool interface accepts TSchema,
  * so this works end-to-end without lossy conversion.
  */
-function jsonSchemaToTypeBox(jsonSchema: Record<string, unknown>): TSchema {
+export function jsonSchemaToTypeBox(jsonSchema: Record<string, unknown>): TSchema {
   const schema = jsonSchema.type === "object"
     ? jsonSchema
     : { type: "object", properties: jsonSchema.properties || {}, required: jsonSchema.required || [] };
@@ -61,7 +61,7 @@ function jsonSchemaToTypeBox(jsonSchema: Record<string, unknown>): TSchema {
 /**
  * Serialize MCP CallToolResult content to a string for FabricToolDef.execute().
  */
-function serializeMcpContent(content: unknown): string {
+export function serializeMcpContent(content: unknown): string {
   if (!Array.isArray(content)) return String(content);
   return content
     .map((c: Record<string, unknown>) => {

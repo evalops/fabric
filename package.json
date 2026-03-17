@@ -6,7 +6,9 @@
     "build": "node esbuild.main.mjs && node esbuild.renderer.mjs && cp src/renderer/index.html dist/renderer/ && cp src/renderer/styles.css dist/renderer/",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.json --noEmit",
     "start": "npm run build && electron .",
-    "dev": "npm run start"
+    "dev": "npm run start",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "keywords": [],
   "author": "",
@@ -17,7 +19,8 @@
     "@types/pg": "^8.18.0",
     "electron": "^40.8.0",
     "esbuild": "^0.27.3",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
   },
   "dependencies": {
     "@mariozechner/pi-ai": "^0.58.3",
