@@ -1,7 +1,7 @@
 import { state, DEFAULT_SETTINGS, saveSettings, saveTemplates, bridge } from './state';
 import type { ModelInfo } from './types';
 
-type SettingsTab = "general" | "security" | "governance" | "notifications" | "templates" | "data";
+type SettingsTab = "general" | "mcp" | "security" | "governance" | "notifications" | "templates" | "data";
 
 let activeTab: SettingsTab = "general";
 
@@ -353,20 +353,109 @@ function renderDataTab(): string {
     </div>`;
 }
 
+// ── MCP Servers Tab ───────────────────────────────────
+
+let mcpServers: string[] = [];
+let mcpServersLoaded = false;
+
+async function ensureMcpServers(): Promise<void> {
+  if (mcpServersLoaded) return;
+  if (bridge?.getMcpServers) {
+    try {
+      mcpServers = await bridge.getMcpServers();
+      mcpServersLoaded = true;
+    } catch { /* fall through */ }
+  }
+}
+
+function renderMcpTab(): string {
+  const configPath = "~/.fabric/mcp-servers.json";
+
+  const serverList = mcpServers.length > 0
+    ? `<div class="mcp-server-list">
+        ${mcpServers.map(name => `
+          <div class="mcp-server-row">
+            <span class="mcp-server-status connected"></span>
+            <span class="mcp-server-name">${escHtml(name)}</span>
+            <span class="mcp-server-badge">connected</span>
+          </div>
+        `).join("")}
+      </div>`
+    : `<div style="color: var(--text-muted); font-size: 13px; padding: 8px 0;">No MCP servers connected. Add servers to <code>${configPath}</code> and restart Fabric.</div>`;
+
+  return `
+    <div class="settings-card">
+      <div class="settings-card-header">
+        <div class="settings-card-title">Connected Servers</div>
+        <div class="settings-card-desc">MCP servers provide external tools to the agent. Servers are configured in <code>${configPath}</code>.</div>
+      </div>
+      ${serverList}
+    </div>
+
+    <div class="settings-card">
+      <div class="settings-card-header">
+        <div class="settings-card-title">Configuration</div>
+        <div class="settings-card-desc">Add MCP servers by editing the config file. Each server exposes tools that agents can use during goal execution.</div>
+      </div>
+      <div class="mcp-config-example">
+        <div class="settings-row-label" style="margin-bottom: 8px;">Example configuration</div>
+        <pre class="mcp-config-pre"><code>{
+  "mcpServers": {
+    "filesystem": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]
+    },
+    "remote-api": {
+      "transport": "streamable-http",
+      "url": "https://mcp.example.com/api",
+      "headers": { "Authorization": "Bearer your-token" }
+    }
+  }
+}</code></pre>
+      </div>
+      ${settingsRow("Config file path", "Location of the MCP server configuration file",
+        `<code style="font-size: 12px; color: var(--text-secondary);">${configPath}</code>`
+      )}
+    </div>
+
+    <div class="settings-card">
+      <div class="settings-card-header">
+        <div class="settings-card-title">Server Options</div>
+        <div class="settings-card-desc">Per-server configuration options available in the config file</div>
+      </div>
+      <table class="mcp-options-table">
+        <thead><tr><th>Option</th><th>Type</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>transport</code></td><td>string</td><td>"stdio", "sse", or "streamable-http"</td></tr>
+          <tr><td><code>command</code></td><td>string</td><td>Command to spawn (stdio only)</td></tr>
+          <tr><td><code>args</code></td><td>string[]</td><td>Command arguments (stdio only)</td></tr>
+          <tr><td><code>url</code></td><td>string</td><td>Server URL (sse/streamable-http)</td></tr>
+          <tr><td><code>headers</code></td><td>object</td><td>Custom headers for auth</td></tr>
+          <tr><td><code>toolPrefix</code></td><td>string</td><td>Namespace prefix for tool names (default: server name)</td></tr>
+          <tr><td><code>toolTimeoutMs</code></td><td>number</td><td>Per-tool timeout in ms (default: 30000)</td></tr>
+          <tr><td><code>exposeResources</code></td><td>boolean</td><td>Also expose MCP resources as a read tool</td></tr>
+        </tbody>
+      </table>
+    </div>`;
+}
+
 // ── Tabs definition ───────────────────────────────────
 
-const TABS: { id: SettingsTab; icon: string; label: string }[] = [
-  { id: "general", icon: "\u2699", label: "General" },
-  { id: "security", icon: "\u26e8", label: "Security" },
-  { id: "governance", icon: "\u2696", label: "Governance" },
-  { id: "notifications", icon: "\ud83d\udd14", label: "Notifications" },
-  { id: "templates", icon: "\ud83d\udccb", label: "Templates" },
-  { id: "data", icon: "\ud83d\udee1", label: "Data & Access" },
+const TABS: { id: SettingsTab; label: string }[] = [
+  { id: "general", label: "General" },
+  { id: "mcp", label: "MCP Servers" },
+  { id: "security", label: "Security" },
+  { id: "governance", label: "Governance" },
+  { id: "notifications", label: "Notifications" },
+  { id: "templates", label: "Templates" },
+  { id: "data", label: "Data & Access" },
 ];
 
 function renderTabContent(): string {
   switch (activeTab) {
     case "general": return renderGeneralTab();
+    case "mcp": return renderMcpTab();
     case "security": return renderSecurityTab();
     case "governance": return renderGovernanceTab();
     case "notifications": return renderNotificationsTab();
@@ -384,7 +473,6 @@ export function renderSettings(): void {
     <div class="settings-tabs">
       ${TABS.map(t => `
         <button class="settings-tab${activeTab === t.id ? " active" : ""}" data-tab="${t.id}">
-          <span class="settings-tab-icon">${t.icon}</span>
           <span>${t.label}</span>
         </button>
       `).join("")}
@@ -409,6 +497,7 @@ export function renderSettings(): void {
   // ── Wire controls based on active tab ─────────────
   switch (activeTab) {
     case "general": wireGeneralTab(); break;
+    case "mcp": wireMcpTab(); break;
     case "security": wireSecurityTab(); break;
     case "governance": wireGovernanceTab(); break;
     case "notifications": wireNotificationsTab(); break;
@@ -508,6 +597,16 @@ function wireGeneralTab(): void {
   wireNumber("settings-budget", v => { state.settings.maxBudgetUsd = v; }, DEFAULT_SETTINGS.maxBudgetUsd);
   wireNumber("settings-max-turns", v => { state.settings.maxTurns = v; }, DEFAULT_SETTINGS.maxTurns);
   wireCheckbox("settings-agent-messages", v => { state.settings.showAgentMessages = v; });
+}
+
+function wireMcpTab(): void {
+  if (!mcpServersLoaded) {
+    ensureMcpServers().then(() => {
+      if (mcpServersLoaded && activeTab === "mcp") {
+        renderSettings();
+      }
+    });
+  }
 }
 
 function wireSecurityTab(): void {

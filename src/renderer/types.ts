@@ -210,6 +210,7 @@ export interface FabricBridge {
   getModels(): Promise<ModelInfo[]>;
   resolveAttention(questionId: string, response: string): Promise<{ success: boolean }>;
   updateSettings(settings: Partial<FabricSettings>): Promise<{ success: boolean }>;
+  getMcpServers(): Promise<string[]>;
 }
 
 export interface GoalTemplate {

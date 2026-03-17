@@ -60,4 +60,8 @@ contextBridge.exposeInMainWorld("fabric", {
   // Update engine settings
   updateSettings: (settings: { apiKey?: string; model?: string; maxBudgetUsd?: number; maxTurns?: number; provider?: string }) =>
     ipcRenderer.invoke("fabric:update-settings", settings),
+
+  // Get connected MCP servers
+  getMcpServers: () =>
+    ipcRenderer.invoke("fabric:get-mcp-servers"),
 });
