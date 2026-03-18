@@ -22,7 +22,7 @@ const viewConfig: Record<string, { title: string; subtitle: string; render: () =
   "needs-you": { title: "Needs you", subtitle: "Things that need a human decision", render: renderNeedsYou },
   "all-work": { title: "All work", subtitle: "Every goal the system is working on", render: renderAllWork },
   "activity": { title: "Activity", subtitle: "Live stream of what agents are doing", render: renderActivity },
-  "agents": { title: "Agents", subtitle: `${state.agents.length} agents in the mesh`, render: renderAgents },
+  "agents": { title: "Agents", subtitle: "Specialized agent fleet", render: renderAgents },
   "graph": { title: "Graph", subtitle: "How goals and agents connect", render: renderGraph },
   "costs": { title: "Costs", subtitle: "Spend, tokens, and budget tracking", render: renderCosts },
   "settings": { title: "Settings", subtitle: "Configure Fabric preferences and API keys", render: renderSettings },
@@ -413,10 +413,21 @@ async function loadRealData(): Promise<void> {
   }
 }
 
+// ── Built-in Agent Profiles (mirrors engine AGENT_PROFILES) ──
+const AGENT_PROFILE_META: Record<string, { name: string; role: string; capabilities: string[] }> = {
+  architect: { name: "Architect", role: "System design, planning, and technical analysis", capabilities: ["planning", "analysis", "read-only"] },
+  coder:     { name: "Coder", role: "Implementation, file editing, and code generation", capabilities: ["implementation", "file-ops", "verify"] },
+  reviewer:  { name: "Reviewer", role: "Code review, quality audit, and security analysis", capabilities: ["review", "audit", "read-only"] },
+  researcher:{ name: "Researcher", role: "Information gathering, documentation, and analysis", capabilities: ["research", "exploration", "read-only"] },
+  tester:    { name: "Tester", role: "Test writing, test execution, and verification", capabilities: ["testing", "verify", "file-ops"] },
+};
+
 /**
- * Derive agent roster from goal steps and tool calls.
- * Since the engine doesn't manage a separate agent registry,
- * we infer agents from the names referenced in goal execution.
+ * Derive agent roster from goal profiles, step metadata, and built-in profiles.
+ * Three sources of agent data:
+ * 1. Built-in profiles (always shown, so the fleet is visible even with no goals)
+ * 2. goal.agentProfile — real delegated agent instances
+ * 3. step.agent — legacy step-level agent hints
  */
 export function deriveAgentsFromGoals(): void {
   const agentMap = new Map<string, {
@@ -429,18 +440,71 @@ export function deriveAgentsFromGoals(): void {
     currentStep?: string;
     lastSeen: number;
     capabilities: Set<string>;
+    costUsd: number;
+    isProfile: boolean;
+    role?: string;
   }>();
 
+  // Seed with built-in profiles so they always appear
+  for (const [id, meta] of Object.entries(AGENT_PROFILE_META)) {
+    agentMap.set(meta.name, {
+      goals: new Set(),
+      tasks: 0, errors: 0, totalMs: 0,
+      isWorking: false, lastSeen: 0,
+      capabilities: new Set(meta.capabilities),
+      costUsd: 0, isProfile: true, role: meta.role,
+    });
+  }
+
   for (const goal of state.goals) {
+    // Source 1: goal.agentProfile — real delegated agent instances
+    if (goal.agentProfile) {
+      const meta = AGENT_PROFILE_META[goal.agentProfile];
+      const agentName = meta?.name || goal.agentProfile;
+      let agent = agentMap.get(agentName);
+      if (!agent) {
+        agent = {
+          goals: new Set(), tasks: 0, errors: 0, totalMs: 0,
+          isWorking: false, lastSeen: 0,
+          capabilities: new Set(meta?.capabilities || []),
+          costUsd: 0, isProfile: true, role: meta?.role,
+        };
+        agentMap.set(agentName, agent);
+      }
+      agent.goals.add(goal.id);
+      agent.costUsd += goal.costUsd;
+      if (goal.status === "active") {
+        agent.isWorking = true;
+        agent.currentGoal = goal.title;
+        const runningStep = goal.steps.find(s => s.state === "running");
+        if (runningStep) agent.currentStep = runningStep.name;
+      }
+      if (goal.status === "complete") agent.tasks++;
+      if (goal.status === "failed") agent.errors++;
+      if (goal.startedAt > agent.lastSeen) agent.lastSeen = goal.startedAt;
+    }
+
+    // Source 2: step.agent — legacy step-level agent hints
     for (const step of goal.steps) {
       if (!step.agent) continue;
-      let agent = agentMap.get(step.agent);
+      // Map step agent names to profile names if they match
+      const profileMatch = Object.entries(AGENT_PROFILE_META).find(
+        ([id, meta]) => id === step.agent?.toLowerCase() || meta.name.toLowerCase() === step.agent?.toLowerCase()
+      );
+      const agentName = profileMatch ? profileMatch[1].name : step.agent;
+
+      let agent = agentMap.get(agentName);
       if (!agent) {
-        agent = { goals: new Set(), tasks: 0, errors: 0, totalMs: 0, isWorking: false, lastSeen: 0, capabilities: new Set() };
-        agentMap.set(step.agent, agent);
+        agent = {
+          goals: new Set(), tasks: 0, errors: 0, totalMs: 0,
+          isWorking: false, lastSeen: 0, capabilities: new Set(),
+          costUsd: 0, isProfile: false,
+        };
+        agentMap.set(agentName, agent);
       }
       agent.goals.add(goal.id);
       if (step.state === "done") agent.tasks++;
+      if (step.state === "failed") agent.errors++;
       if (step.state === "running") {
         agent.isWorking = true;
         agent.currentGoal = goal.title;
@@ -448,25 +512,22 @@ export function deriveAgentsFromGoals(): void {
       }
       if (step.time && step.time > agent.lastSeen) agent.lastSeen = step.time;
     }
-
-    // Note: tool calls don't carry agent attribution from the engine,
-    // so we can't use them to infer per-agent capabilities here.
   }
 
   state.agents = Array.from(agentMap.entries()).map(([name, data]) => ({
-    id: `a-${name}`,
+    id: `a-${name.toLowerCase().replace(/\s+/g, "-")}`,
     name,
     capabilities: Array.from(data.capabilities),
-    status: data.isWorking ? "working" as const : "idle" as const,
+    status: data.isWorking ? "working" as const : data.errors > 0 && data.tasks === 0 ? "failed" as const : "idle" as const,
     currentGoal: data.currentGoal,
     currentStep: data.currentStep,
     tasksCompleted: data.tasks,
     avgLatency: "--",
-    costToday: "--",
+    costToday: data.costUsd > 0 ? `$${data.costUsd.toFixed(2)}` : "--",
     history: [],
     goalHistory: Array.from(data.goals).map(goalId => {
       const g = state.goals.find(gl => gl.id === goalId);
-      return { goalId, goalTitle: g?.title || goalId, role: "agent", time: g?.startedAt || 0 };
+      return { goalId, goalTitle: g?.title || goalId, role: data.role || "agent", time: g?.startedAt || 0 };
     }),
     frequentPartners: [],
     successRate: data.tasks > 0 ? Math.round(((data.tasks - data.errors) / data.tasks) * 100) : 100,
