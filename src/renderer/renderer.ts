@@ -390,6 +390,9 @@ async function loadRealData(): Promise<void> {
         sessionId: g.sessionId,
         thinking: g.thinking || [],
         diffs: g.diffs || [],
+        parentGoalId: g.parentGoalId,
+        childGoalIds: g.childGoalIds || [],
+        agentProfile: g.agentProfile,
       }));
 
       // Derive agents from goal step data

@@ -47,6 +47,10 @@ export interface Goal {
   thinking?: ThinkingEntry[];
   diffs?: DiffEntry[];
   files?: FileArtifact[];
+  // Multi-agent hierarchy
+  parentGoalId?: string;
+  childGoalIds?: string[];
+  agentProfile?: string;
 }
 
 export interface FileArtifact {

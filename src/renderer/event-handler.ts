@@ -35,6 +35,9 @@ export function handleFabricEvent(event: any): void {
           retryCount: newGoal.retryCount || 0,
           thinking: newGoal.thinking || [],
           diffs: newGoal.diffs || [],
+          parentGoalId: newGoal.parentGoalId,
+          childGoalIds: newGoal.childGoalIds || [],
+          agentProfile: newGoal.agentProfile,
         });
       }
       deriveAgentsFromGoals();
@@ -62,6 +65,9 @@ export function handleFabricEvent(event: any): void {
         if (data.lastError !== undefined) existing.lastError = data.lastError;
         if (data.sessionId !== undefined) existing.sessionId = data.sessionId;
         if (data.completedAt !== undefined) existing.completedAt = data.completedAt;
+        if (data.childGoalIds !== undefined) existing.childGoalIds = data.childGoalIds;
+        if (data.agentProfile !== undefined) existing.agentProfile = data.agentProfile;
+        if (data.parentGoalId !== undefined) existing.parentGoalId = data.parentGoalId;
       }
       deriveAgentsFromGoals();
       callbacks.renderSidebarGoals();

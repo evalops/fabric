@@ -67,6 +67,10 @@ export interface FabricGoal {
   model?: string;
   // Batch tracking
   batchId?: string;
+  // Multi-agent hierarchy
+  parentGoalId?: string;
+  childGoalIds?: string[];
+  agentProfile?: string;
 }
 
 export interface GoalCreateOptions {
@@ -75,6 +79,112 @@ export interface GoalCreateOptions {
   maxBudgetUsd?: number;
   maxTurns?: number;
   batchId?: string;
+  parentGoalId?: string;
+  agentProfile?: string;
+}
+
+// ── Agent Profiles (Level 2: Specialized Agents) ──────
+// Each profile defines a specialized agent with its own model, prompt,
+// tool access, and budget. The executor delegates to these via delegate_subtask.
+
+export interface AgentProfile {
+  id: string;
+  name: string;
+  role: string;
+  systemPromptAddition: string;
+  model?: string;
+  toolFilter: "all" | "readonly" | "code" | "planning" | "test";
+  maxBudgetFraction: number;
+  maxTurns?: number;
+}
+
+const AGENT_PROFILES: Record<string, AgentProfile> = {
+  architect: {
+    id: "architect",
+    name: "Architect",
+    role: "System design, planning, and technical analysis",
+    systemPromptAddition: `You are a senior software architect. Your job is to ANALYZE and PLAN, not implement.
+Focus on:
+- Understanding existing architecture via repo_map and read_file
+- Identifying the right approach, trade-offs, and risks
+- Producing a clear, actionable plan with specific file paths and changes
+- Flagging potential issues before they become problems
+Do NOT write code or make file changes. Your output is a plan for other agents to execute.`,
+    model: "anthropic/claude-opus-4-6",
+    toolFilter: "readonly",
+    maxBudgetFraction: 0.15,
+    maxTurns: 10,
+  },
+  coder: {
+    id: "coder",
+    name: "Coder",
+    role: "Implementation, file editing, and code generation",
+    systemPromptAddition: `You are a focused implementation agent. Your job is to write code and make file changes.
+- Read existing code before modifying it
+- Make minimal, targeted changes — don't refactor beyond what's needed
+- Run verify after making changes to catch errors early
+- If verification fails, fix the issue before reporting the step as done`,
+    toolFilter: "code",
+    maxBudgetFraction: 0.40,
+  },
+  reviewer: {
+    id: "reviewer",
+    name: "Reviewer",
+    role: "Code review, quality audit, and security analysis",
+    systemPromptAddition: `You are a code reviewer. Your job is to AUDIT code, not change it.
+- Read the code thoroughly — check for bugs, security issues, style problems
+- Run verify to check tests/types/lint pass
+- Report findings clearly with file:line references
+- Categorize issues as critical (must fix), warning (should fix), or note (consider)
+Do NOT modify files. Report your findings in the goal summary.`,
+    model: "anthropic/claude-opus-4-6",
+    toolFilter: "readonly",
+    maxBudgetFraction: 0.15,
+    maxTurns: 8,
+  },
+  researcher: {
+    id: "researcher",
+    name: "Researcher",
+    role: "Information gathering, documentation, and analysis",
+    systemPromptAddition: `You are a research agent. Your job is to gather information and synthesize findings.
+- Use repo_map and read_file to explore the codebase
+- Use run_command for git log, grep, and other search operations
+- Produce a clear, structured summary of your findings
+- Cite specific files and line numbers when referencing code`,
+    toolFilter: "readonly",
+    maxBudgetFraction: 0.15,
+    maxTurns: 10,
+  },
+  tester: {
+    id: "tester",
+    name: "Tester",
+    role: "Test writing, test execution, and verification",
+    systemPromptAddition: `You are a testing agent. Your job is to write and run tests.
+- Read existing tests to understand patterns and conventions
+- Write focused tests that cover the specified functionality
+- Run verify to execute the test suite
+- If tests fail, fix them — don't leave broken tests
+- Report test coverage and any gaps found`,
+    toolFilter: "test",
+    maxBudgetFraction: 0.30,
+  },
+};
+
+/** Filter tools based on agent profile access level */
+function filterToolsForProfile(tools: FabricToolDef[], filter: AgentProfile["toolFilter"]): FabricToolDef[] {
+  const READONLY_TOOLS = new Set(["read_file", "run_command", "repo_map", "report_steps", "update_step", "complete_goal", "ask_human", "revise_plan"]);
+  const CODE_TOOLS = new Set([...READONLY_TOOLS, "write_file", "edit_file", "verify"]);
+  const TEST_TOOLS = new Set([...CODE_TOOLS]); // same as code but prompt differs
+  const PLANNING_TOOLS = new Set(["read_file", "repo_map", "run_command", "report_steps", "update_step", "complete_goal", "revise_plan", "ask_human"]);
+
+  switch (filter) {
+    case "all": return tools;
+    case "readonly": return tools.filter(t => READONLY_TOOLS.has(t.name));
+    case "code": return tools.filter(t => CODE_TOOLS.has(t.name));
+    case "test": return tools.filter(t => TEST_TOOLS.has(t.name));
+    case "planning": return tools.filter(t => PLANNING_TOOLS.has(t.name));
+    default: return tools;
+  }
 }
 
 export type GoalOutcome = "success" | "budget_exhausted" | "turns_exhausted" | "user_abort" | "error";
@@ -569,6 +679,50 @@ function createFabricTools(goalId: string): FabricToolDef[] {
       }),
       execute: async (args, ctx) => {
         return generateRepoMap(ctx, args.directory as string | undefined, args.depth as number | undefined, args.include_symbols as boolean | undefined);
+      },
+    },
+    {
+      name: "delegate_subtask",
+      description: "Delegate a subtask to a specialized agent. The agent runs in its own context with role-appropriate tools and prompt. Available agents: architect (planning/analysis, read-only, uses Opus), coder (implementation, file tools), reviewer (code audit, read-only, uses Opus), researcher (info gathering, read-only), tester (test writing/running). Use wait=true to block until done, or wait=false to run in background.",
+      parameters: Type.Object({
+        agent: Type.Union([
+          Type.Literal("architect"),
+          Type.Literal("coder"),
+          Type.Literal("reviewer"),
+          Type.Literal("researcher"),
+          Type.Literal("tester"),
+        ], { description: "Which specialized agent to delegate to" }),
+        task: Type.String({ description: "Clear description of what the agent should accomplish" }),
+        wait: Type.Optional(Type.Boolean({ description: "Wait for completion and return result (default: true). Set false for parallel work." })),
+      }),
+      execute: async (args, ctx) => {
+        const agentId = args.agent as string;
+        const task = args.task as string;
+        const wait = args.wait !== false;
+        return ctx.engine.delegateGoal(goalId, agentId, task, wait);
+      },
+    },
+    {
+      name: "check_subtask",
+      description: "Check the status of a delegated subtask. Use this to poll background subtasks started with delegate_subtask(wait=false).",
+      parameters: Type.Object({
+        goalId: Type.String({ description: "The goal ID returned by delegate_subtask" }),
+      }),
+      execute: async (args, ctx) => {
+        const childGoal = ctx.engine.getGoal(args.goalId as string);
+        if (!childGoal) return `Goal ${args.goalId} not found.`;
+        const lines = [
+          `Status: ${childGoal.status}${childGoal.outcome ? ` (${childGoal.outcome})` : ""}`,
+          `Progress: ${childGoal.progress}%`,
+          `Agent: ${childGoal.agentProfile || "default"}`,
+          `Cost: $${childGoal.costUsd.toFixed(4)}`,
+          `Summary: ${childGoal.summary}`,
+        ];
+        if (childGoal.steps.length > 0) {
+          lines.push(`Steps:`);
+          childGoal.steps.forEach((s, i) => lines.push(`  ${i}. [${s.state}] ${s.name}`));
+        }
+        return lines.join("\n");
       },
     },
     {
@@ -1580,6 +1734,9 @@ export class FabricEngine extends EventEmitter {
     const id = `goal-${++this.goalCounter}-${Date.now()}`;
     const title = opts.description.charAt(0).toUpperCase() + opts.description.slice(1);
 
+    const profile = opts.agentProfile ? AGENT_PROFILES[opts.agentProfile] : undefined;
+    const creatorLabel = profile ? `<strong>${profile.name}</strong> agent` : `<strong>you</strong>`;
+
     const goal: FabricGoal = {
       id,
       title,
@@ -1589,7 +1746,7 @@ export class FabricEngine extends EventEmitter {
       agentCount: 0,
       steps: [],
       timeline: [
-        { time: Date.now(), text: `Goal created by <strong>you</strong>: "${title}"` },
+        { time: Date.now(), text: `Goal created by ${creatorLabel}: "${title}"` },
       ],
       costUsd: 0,
       inputTokens: 0,
@@ -1598,8 +1755,10 @@ export class FabricEngine extends EventEmitter {
       turnCount: 0,
       toolCalls: [],
       retryCount: 0,
-      model: opts.model,
+      model: opts.model || profile?.model,
       batchId: opts.batchId,
+      parentGoalId: opts.parentGoalId,
+      agentProfile: opts.agentProfile,
     };
 
     this.goals.set(id, goal);
@@ -1697,12 +1856,20 @@ export class FabricEngine extends EventEmitter {
     const provider = this.defaultProvider;
     const model = resolveModelById(goalModelId, provider);
 
+    // Resolve agent profile (if this goal was delegated to a specialized agent)
+    const profile = goal.agentProfile ? AGENT_PROFILES[goal.agentProfile] : undefined;
+
     // Collect all tools: file tools + fabric tools + extension tools
-    const tools: FabricToolDef[] = [
+    let tools: FabricToolDef[] = [
       ...createFileTools(),
       ...createFabricTools(goalId),
       ...this.extensions.flatMap(e => e.tools || []),
     ];
+
+    // Filter tools based on agent profile access level
+    if (profile) {
+      tools = filterToolsForProfile(tools, profile.toolFilter);
+    }
 
     // Build extension prompt snippets
     const extPromptSnippets = this.extensions
@@ -1714,6 +1881,22 @@ export class FabricEngine extends EventEmitter {
     for (const ext of this.extensions) {
       if (ext.beforeGoal) await ext.beforeGoal(goalId, description);
     }
+
+    // Build profile-specific prompt section
+    const profileSection = profile
+      ? `\n\nYou are the **${profile.name}** agent (${profile.role}).\n${profile.systemPromptAddition}`
+      : `\n\nYou can delegate complex subtasks to specialized agents using \`delegate_subtask\`:
+- **architect**: Planning and analysis (read-only, uses Opus for deep thinking)
+- **coder**: Implementation and file changes
+- **reviewer**: Code audit and quality review (read-only, uses Opus)
+- **researcher**: Information gathering and exploration (read-only)
+- **tester**: Test writing and verification
+
+For complex goals, delegate to specialists rather than doing everything yourself. Example workflow:
+1. delegate_subtask(agent="architect", task="analyze the auth system and plan the fix")
+2. Use the architect's output to guide implementation
+3. delegate_subtask(agent="coder", task="implement the auth fix per the architect's plan")
+4. delegate_subtask(agent="reviewer", task="review the auth changes for security issues")`;
 
     const executorPrompt = `You are the Fabric orchestration agent. Your job is to accomplish the following goal:
 
@@ -1735,6 +1918,7 @@ Key principles:
 - VERIFY EARLY: Run \`verify\` after every significant code change, not just at the end.
 - RE-PLAN WHEN STUCK: If a step fails or you discover unexpected complexity, call \`revise_plan\` instead of improvising.
 - UNDERSTAND FIRST: Use \`repo_map\` and \`read_file\` to understand existing code before modifying it.
+${profileSection}
 
 Available tools: ${tools.map(t => t.name).join(", ")}
 
@@ -1847,6 +2031,95 @@ Work in the current directory. Be efficient and focused.${extPromptSnippets ? `\
     }
 
     this.pruneOldGoals();
+  }
+
+  // ── Multi-Agent Delegation ─────────────────────────
+
+  /**
+   * Delegate a subtask to a specialized agent profile. Creates a child goal
+   * with profile-specific model, tools, and prompt. Optionally waits for completion.
+   */
+  async delegateGoal(parentGoalId: string, agentId: string, task: string, wait: boolean): Promise<string> {
+    const profile = AGENT_PROFILES[agentId];
+    if (!profile) {
+      return `Unknown agent profile: "${agentId}". Available: ${Object.keys(AGENT_PROFILES).join(", ")}`;
+    }
+
+    const parentGoal = this.goals.get(parentGoalId);
+    if (!parentGoal) return `Parent goal ${parentGoalId} not found.`;
+
+    // Budget: fraction of parent's remaining budget
+    const parentBudget = (parentGoal as FabricGoal & { _maxBudget?: number })._maxBudget ?? this.defaultBudget;
+    const remaining = Math.max(0.10, parentBudget - parentGoal.costUsd);
+    const childBudget = Math.max(0.10, remaining * profile.maxBudgetFraction);
+    const childTurns = profile.maxTurns ?? this.defaultMaxTurns;
+
+    const childId = await this.createGoal({
+      description: task,
+      model: profile.model,
+      maxBudgetUsd: childBudget,
+      maxTurns: childTurns,
+      parentGoalId,
+      agentProfile: profile.id,
+    });
+
+    // Track parent-child relationship
+    if (!parentGoal.childGoalIds) parentGoal.childGoalIds = [];
+    parentGoal.childGoalIds.push(childId);
+    parentGoal.agentCount = (parentGoal.agentCount || 0) + 1;
+    parentGoal.timeline.push({
+      time: Date.now(),
+      text: `<strong>orchestrator</strong> delegated to <strong>${profile.name}</strong>: "${task.slice(0, 80)}"`,
+    });
+    this.emitEvent({ type: "goal-updated", goalId: parentGoalId, data: parentGoal });
+    this.emitEvent({
+      type: "activity",
+      goalId: parentGoalId,
+      data: { time: Date.now(), text: `<strong>${profile.name}</strong> agent spawned for "${task.slice(0, 60)}"` },
+    });
+
+    if (!wait) {
+      return `Subtask delegated to ${profile.name} (background). Goal ID: ${childId}. Use check_subtask to monitor progress.`;
+    }
+
+    // Wait for child to finish
+    const childGoal = this.goals.get(childId)!;
+    await this.waitForGoalCompletion(childId, 300000); // 5 minute timeout
+
+    const result = [
+      `## ${profile.name} Agent Result`,
+      `Status: ${childGoal.status} (${childGoal.outcome || "unknown"})`,
+      `Cost: $${childGoal.costUsd.toFixed(4)} | Turns: ${childGoal.turnCount}`,
+      `Summary: ${childGoal.summary}`,
+    ];
+
+    if (childGoal.steps.length > 0) {
+      result.push(`Steps completed: ${childGoal.steps.filter(s => s.state === "done").length}/${childGoal.steps.length}`);
+    }
+
+    return result.join("\n");
+  }
+
+  /** Wait for a goal to reach a terminal state (complete, failed, blocked) */
+  private waitForGoalCompletion(goalId: string, timeoutMs: number): Promise<void> {
+    return new Promise((resolve) => {
+      const goal = this.goals.get(goalId);
+      if (!goal || goal.status !== "active") { resolve(); return; }
+
+      const checkInterval = setInterval(() => {
+        const g = this.goals.get(goalId);
+        if (!g || g.status !== "active") {
+          clearInterval(checkInterval);
+          clearTimeout(timeout);
+          resolve();
+        }
+      }, 500);
+
+      const timeout = setTimeout(() => {
+        clearInterval(checkInterval);
+        resolve(); // timeout — return whatever state we have
+      }, timeoutMs);
+    });
   }
 
   private pruneOldGoals(): void {
