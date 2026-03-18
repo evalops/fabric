@@ -196,6 +196,7 @@ function init(): void {
 
   // Always use real data — no demo/mock mode
   loadRealData();
+  loadMcpInfo();
 
   applyTheme(state.settings.theme);
   renderTitleStatus();
@@ -414,13 +415,51 @@ async function loadRealData(): Promise<void> {
 }
 
 // ── Built-in Agent Profiles (mirrors engine AGENT_PROFILES) ──
-const AGENT_PROFILE_META: Record<string, { name: string; role: string; capabilities: string[] }> = {
-  architect: { name: "Architect", role: "System design, planning, and technical analysis", capabilities: ["planning", "analysis", "read-only"] },
-  coder:     { name: "Coder", role: "Implementation, file editing, and code generation", capabilities: ["implementation", "file-ops", "verify"] },
-  reviewer:  { name: "Reviewer", role: "Code review, quality audit, and security analysis", capabilities: ["review", "audit", "read-only"] },
-  researcher:{ name: "Researcher", role: "Information gathering, documentation, and analysis", capabilities: ["research", "exploration", "read-only"] },
-  tester:    { name: "Tester", role: "Test writing, test execution, and verification", capabilities: ["testing", "verify", "file-ops"] },
+const AGENT_PROFILE_META: Record<string, { name: string; role: string; capabilities: string[]; model: string; toolAccess: string; budgetPct: number; tools: string[] }> = {
+  architect: {
+    name: "Architect", role: "System design, planning, and technical analysis",
+    capabilities: ["planning", "analysis", "read-only"],
+    model: "Opus", toolAccess: "read-only", budgetPct: 15,
+    tools: ["read_file", "run_command", "repo_map", "report_steps", "update_step", "revise_plan", "ask_human"],
+  },
+  coder: {
+    name: "Coder", role: "Implementation, file editing, and code generation",
+    capabilities: ["implementation", "file-ops", "verify"],
+    model: "Sonnet", toolAccess: "code", budgetPct: 40,
+    tools: ["read_file", "write_file", "edit_file", "run_command", "repo_map", "verify", "report_steps", "update_step", "revise_plan", "ask_human"],
+  },
+  reviewer: {
+    name: "Reviewer", role: "Code review, quality audit, and security analysis",
+    capabilities: ["review", "audit", "read-only"],
+    model: "Opus", toolAccess: "read-only", budgetPct: 15,
+    tools: ["read_file", "run_command", "repo_map", "verify", "report_steps", "update_step", "ask_human"],
+  },
+  researcher: {
+    name: "Researcher", role: "Information gathering, documentation, and analysis",
+    capabilities: ["research", "exploration", "read-only"],
+    model: "Sonnet", toolAccess: "read-only", budgetPct: 15,
+    tools: ["read_file", "run_command", "repo_map", "report_steps", "update_step", "ask_human"],
+  },
+  tester: {
+    name: "Tester", role: "Test writing, test execution, and verification",
+    capabilities: ["testing", "verify", "file-ops"],
+    model: "Sonnet", toolAccess: "test", budgetPct: 30,
+    tools: ["read_file", "write_file", "edit_file", "run_command", "repo_map", "verify", "report_steps", "update_step", "revise_plan", "ask_human"],
+  },
 };
+
+// Track MCP infrastructure — populated at init from bridge
+let mcpServerInfo: { connected: string[]; skipped: string[] } = { connected: [], skipped: [] };
+
+async function loadMcpInfo(): Promise<void> {
+  if (!bridge) return;
+  try {
+    mcpServerInfo = await bridge.getMcpServers();
+    // Re-derive agents now that we know MCP tool counts
+    deriveAgentsFromGoals();
+    if (state.currentView === "agents") renderAgents();
+  } catch { /* non-fatal */ }
+}
 
 /**
  * Derive agent roster from goal profiles, step metadata, and built-in profiles.
@@ -446,12 +485,19 @@ export function deriveAgentsFromGoals(): void {
   }>();
 
   // Seed with built-in profiles so they always appear
-  for (const [id, meta] of Object.entries(AGENT_PROFILE_META)) {
+  for (const [, meta] of Object.entries(AGENT_PROFILE_META)) {
+    const mcpToolCount = mcpServerInfo.connected.length > 0 ? ` +${mcpServerInfo.connected.length} MCP` : "";
+    const enrichedCaps = [
+      ...meta.capabilities,
+      meta.model,
+      `${meta.tools.length} tools${mcpToolCount}`,
+      `${meta.budgetPct}% budget`,
+    ];
     agentMap.set(meta.name, {
       goals: new Set(),
       tasks: 0, errors: 0, totalMs: 0,
       isWorking: false, lastSeen: 0,
-      capabilities: new Set(meta.capabilities),
+      capabilities: new Set(enrichedCaps),
       costUsd: 0, isProfile: true, role: meta.role,
     });
   }
